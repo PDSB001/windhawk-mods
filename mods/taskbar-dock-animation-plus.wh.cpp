@@ -1328,6 +1328,25 @@ static ButtonKind ClassifyButton(FrameworkElement const& e) {
 }
 
 
+static void IncludeIconContentBounds(
+    std::optional<winrt::Windows::Foundation::Rect>& content,
+    winrt::Windows::Foundation::Rect bounds, bool largestOnly) {
+    if (!(std::isfinite(bounds.X) && std::isfinite(bounds.Y) &&
+          std::isfinite(bounds.Width) && std::isfinite(bounds.Height) &&
+          bounds.Width > 0.0f && bounds.Height > 0.0f)) return;
+    if (!content) {
+        content = bounds;
+    } else if (largestOnly) {
+        if (bounds.Width * bounds.Height > content->Width * content->Height) content = bounds;
+    } else {
+        const float left = std::min(content->X, bounds.X);
+        const float top = std::min(content->Y, bounds.Y);
+        const float right = std::max(content->X + content->Width, bounds.X + bounds.Width);
+        const float bottom = std::max(content->Y + content->Height, bounds.Y + bounds.Height);
+        content = {left, top, right - left, bottom - top};
+    }
+}
+
 static bool ShouldAnimateElement(FrameworkElement const& e) {
     const int mode = g_settings.excludeSystemButtonsMode;
     if (mode == 0) return true;
@@ -1613,36 +1632,42 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
             }
             info.elementWidth = ctx.isVertical ? element.ActualHeight() : element.ActualWidth();
 
-            if (info.elementWidth > 0.0 && IsTaskListButtonExact(element)) {
-                double largestArea = 0.0;
+            if (info.elementWidth > 0.0) {
+                const bool isAppButton = IsTaskListButtonExact(element);
+                std::optional<winrt::Windows::Foundation::Rect> content;
                 const auto findFootprint = [&](auto const& self, FrameworkElement const& parent) -> void {
                     EnumChildElements(parent, [&](FrameworkElement child) {
                         if (child.Visibility() != Visibility::Visible) return false;
-                        if (child.try_as<Controls::Image>() || child.try_as<Controls::IconElement>()) {
+                        // Indicators, backgrounds and labels are not app glyphs.
+                        const auto name = child.Name();
+                        if (name == L"RunningIndicator" || name == L"ProgressIndicator") return false;
+                        const auto type = winrt::get_class_name(child);
+                        const std::wstring_view typeName(type);
+                        const bool simpleShape = typeName.ends_with(L".Shapes.Rectangle") ||
+                            typeName.ends_with(L".Shapes.Ellipse") || typeName.ends_with(L".Shapes.Polygon");
+                        const bool glyph = child.try_as<Controls::Image>() ||
+                            child.try_as<Controls::IconElement>() ||
+                            (!isAppButton && (typeName.ends_with(L".AnimatedIcon") ||
+                                typeName.ends_with(L".AnimatedVisualPlayer") ||
+                                typeName.ends_with(L".Shapes.Path") || simpleShape ||
+                                child.try_as<Controls::TextBlock>()));
+                        if (glyph) {
                             const auto bounds = child.TransformToVisual(element).TransformBounds({
                                 0.0f, 0.0f, static_cast<float>(child.ActualWidth()),
                                 static_cast<float>(child.ActualHeight())});
-                            const double start = ctx.isVertical ? bounds.Y : bounds.X;
-                            const double width = ctx.isVertical ? bounds.Height : bounds.Width;
-                            const double area = static_cast<double>(bounds.Width) * bounds.Height;
-                            if (area > largestArea && width >= 12.0 &&
-                                start >= 0.0 && start + width <= info.elementWidth) {
-                                largestArea = area;
-                                // Labels retain their full button width for wave layout,
-                                // but still need the painted glyph's cross-axis bounds.
-                                if (!g_settings.taskbarLabelsMode) {
-                                    info.footprintStart = start / info.elementWidth;
-                                    info.footprintEnd = (start + width) / info.elementWidth;
-                                }
-                                const float crossStart = ctx.isVertical ? bounds.X : bounds.Y;
-                                const float crossSize = ctx.isVertical ? bounds.Width : bounds.Height;
-                                if (crossStart >= 0.0f && crossSize > 0.0f &&
-                                    crossStart + crossSize <= info.transforms.crossExtent) {
-                                    info.transforms.crossStart = crossStart;
-                                    info.transforms.crossEnd = crossStart + crossSize;
-                                } else {
-                                    info.transforms.crossStart = info.transforms.crossEnd = 0.0f;
-                                }
+                            const float start = ctx.isVertical ? bounds.Y : bounds.X;
+                            const float width = ctx.isVertical ? bounds.Height : bounds.Width;
+                            const float crossStart = ctx.isVertical ? bounds.X : bounds.Y;
+                            const float crossSize = ctx.isVertical ? bounds.Width : bounds.Height;
+                            const bool buttonBackground = simpleShape &&
+                                (bounds.Width >= element.ActualWidth() * 0.9 ||
+                                 bounds.Height >= element.ActualHeight() * 0.9);
+                            if (!buttonBackground && start >= 0.0f && start + width <= info.elementWidth &&
+                                crossStart >= 0.0f && crossStart + crossSize <= info.transforms.crossExtent &&
+                                (!isAppButton || width >= 12.0f)) {
+                                // A system glyph can contain multiple paths or widget
+                                // text blocks. Keep their union, not just one fragment.
+                                IncludeIconContentBounds(content, bounds, isAppButton);
                             }
                         }
                         self(self, child);
@@ -1650,6 +1675,18 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
                     });
                 };
                 findFootprint(findFootprint, element);
+                if (content) {
+                    const float start = ctx.isVertical ? content->Y : content->X;
+                    const float width = ctx.isVertical ? content->Height : content->Width;
+                    // Application labels retain the full native slot for layout.
+                    if (!g_settings.taskbarLabelsMode || !isAppButton) {
+                        info.footprintStart = start / info.elementWidth;
+                        info.footprintEnd = (start + width) / info.elementWidth;
+                    }
+                    info.transforms.crossStart = ctx.isVertical ? content->X : content->Y;
+                    info.transforms.crossEnd = info.transforms.crossStart +
+                        (ctx.isVertical ? content->Width : content->Height);
+                }
             }
 
             info.originalCenterX = (ctx.isVertical ? point.Y : point.X) +
