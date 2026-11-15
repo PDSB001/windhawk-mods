@@ -58,7 +58,7 @@ Bring macOS-style Dock magnification to the Windows 11 taskbar. Plus builds on t
 
 **Requires the Windows 11 XAML taskbar. / 需要 Windows 11 的 XAML 任务栏。**
 
-![Taskbar Dock Animation Plus in action](https://cdn.jsdelivr.net/gh/PDSB001/windhawk-mods@db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/wave.gif)
+![Taskbar Dock Animation Plus in action](https://raw.githubusercontent.com/pdsb001/windhawk-mods/db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/wave.gif)
 
 ## ![Sparkles](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/sparkles.svg) Features / 功能
 
@@ -96,7 +96,7 @@ If automatic detection gives the wrong direction, choose the actual edge in **Ta
 
 自动识别方向不对时，在“任务栏位置”选择实际的底部、顶部、左侧或右侧。手动选择对所有任务栏生效，只控制动画，不会移动 Windows 任务栏。各显示器位置不同时，可在识别正常的情况下使用自动模式。
 
-![Bottom, top, left, and right taskbar previews](https://cdn.jsdelivr.net/gh/PDSB001/windhawk-mods@db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/four-positions.gif)
+![Bottom, top, left, and right taskbar previews](https://raw.githubusercontent.com/PDSB001/windhawk-mods/db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/four-positions.gif?preview=3)
 
 Four separate excerpts from the same desktop recording; vertical views are shown at 50% size. / 四边为同一段实录中不同时间的片段，纵向预览缩小至一半展示。
 
@@ -106,7 +106,7 @@ Start at **130%** maximum scale, then tune the **radius** and spacing for your l
 
 建议从 **130%** 最大倍率开始，再按布局调节半径和间距。“仅放大悬停图标”决定没有应用规则时的全局模式；任务栏显示窗口标题时，可启用“任务栏标签兼容模式”。
 
-![Default and small taskbar sizes](https://cdn.jsdelivr.net/gh/PDSB001/windhawk-mods@db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/taskbar-sizes.gif)
+![Default and small taskbar sizes](https://raw.githubusercontent.com/PDSB001/windhawk-mods/db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/taskbar-sizes.gif?preview=3)
 
 Both rows retain the source pixel scale. / 默认与小号两行保留原录像的像素比例。
 
