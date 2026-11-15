@@ -20,7 +20,7 @@
 // @homepage          https://incconutwo.com
 // @include           explorer.exe
 // @architecture      x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshcore -lwindowsapp -luser32 -ladvapi32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshcore -lwindowsapp -luser32
 // ==/WindhawkMod==
 
 /*
@@ -66,6 +66,8 @@ Scale and translation use Windows Composition, with unchanged visual writes skip
 
 Start with a maximum scale of **130%**, then tune the radius and spacing for your taskbar. Enable **Enlarge only the hovered icon** for a global single-icon effect, or leave it off for the wave. Per-app rules override that global mode.
 
+If animation points in the wrong direction, set **Taskbar position** to the actual edge. Automatic uses window geometry; manual selection applies to all taskbars and changes only animation, not the Windows taskbar position.
+
 Run `Get-StartApps` in PowerShell to find an application's AppUserModelID. Copy the complete ID into a rule, select a mode, and save. Rules match the application ID rather than window titles or executable names. Applications with custom shortcuts or separate profiles can expose different IDs.
 
 | Rule | Result |
@@ -88,6 +90,8 @@ The maximum is a cap, not a guaranteed size: available space can limit wave magn
 - **动画调节**：支持曲线、半径、间距、过渡时长、平滑度和呼吸效果；显示窗口标题时可启用标签兼容模式。
 
 建议先用 **130%** 最大倍率。全局“仅放大悬停图标”决定未匹配应用的模式，应用规则优先于全局模式。在 PowerShell 运行 `Get-StartApps`，把完整 AppUserModelID 填入规则。规则不按窗口标题或程序文件名匹配，自定义快捷方式或独立配置文件可能使用不同的 ID。
+
+动画方向不对时，在“任务栏位置”中选择实际所在的底部、顶部、左侧或右侧。“自动识别”按窗口位置判断；手动选择对所有任务栏生效，只改变动画方向，不会移动 Windows 任务栏。
 
 每应用倍率 **0** 表示继承全局值，**101–220** 表示该应用的最大百分比。倍率是上限，波浪模式还受可用空间限制。最多读取 256 条规则，相同 ID 以最后一条为准，空 ID 忽略。没有匹配规则的应用使用全局设置。
 
@@ -123,6 +127,58 @@ This preview shows the original animation, before the per-app rules and constrai
 
 // ==WindhawkModSettings==
 /*
+- TaskbarPosition: auto
+  $name: Taskbar position
+  $name:zh-CN: 任务栏位置
+  $name:uk-UA: Розташування панелі завдань
+  $name:ja-JP: タスクバーの位置
+  $name:ko-KR: 작업 표시줄 위치
+  $name:pt-BR: Posição da barra de tarefas
+  $name:it-IT: Posizione della barra delle applicazioni
+  $description: Choose the taskbar's actual position if automatic detection gives the wrong animation direction. A manual choice applies to all taskbars; this setting does not move them.
+  $description:zh-CN: 自动识别的动画方向不对时，选择任务栏实际所在位置。手动选择对所有任务栏生效，不会移动任务栏。
+  $options:
+  - auto: Automatic
+  - bottom: Bottom
+  - top: Top
+  - left: Left
+  - right: Right
+  $options:zh-CN:
+  - auto: 自动识别
+  - bottom: 底部
+  - top: 顶部
+  - left: 左侧
+  - right: 右侧
+  $options:uk-UA:
+  - auto: Автоматично
+  - bottom: Знизу
+  - top: Зверху
+  - left: Ліворуч
+  - right: Праворуч
+  $options:ja-JP:
+  - auto: 自動
+  - bottom: 下
+  - top: 上
+  - left: 左
+  - right: 右
+  $options:ko-KR:
+  - auto: 자동
+  - bottom: 아래쪽
+  - top: 위쪽
+  - left: 왼쪽
+  - right: 오른쪽
+  $options:pt-BR:
+  - auto: Automática
+  - bottom: Inferior
+  - top: Superior
+  - left: Esquerda
+  - right: Direita
+  $options:it-IT:
+  - auto: Automatica
+  - bottom: In basso
+  - top: In alto
+  - left: A sinistra
+  - right: A destra
 - AnimationType: cosine
   $name: Animation Curve
   $name:uk-UA: Крива анімації
@@ -427,8 +483,16 @@ using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Media;
 using namespace winrt::Windows::UI::Xaml::Automation;
 
+enum class TaskbarEdge {
+    Bottom,
+    Top,
+    Left,
+    Right
+};
+
 // Settings container
 struct {
+    std::optional<TaskbarEdge> taskbarPosition;
     int animationType;
     double maxScale;
     int effectRadius;
@@ -453,12 +517,6 @@ constexpr double BOUNCE_PERIOD_MS = 1200.0;
 constexpr double BOUNCE_SCALE_AMOUNT = 0.05;
 constexpr double BOUNCE_TRANSLATE_Y = -4.0;
 
-enum class TaskbarEdge {
-    Bottom,
-    Top,
-    Left,
-    Right
-};
 
 struct IconAnimState {
     double waveScale = 1.0;
@@ -659,8 +717,6 @@ struct DockAnimationContext {
     TaskbarEdge lastLayoutEdge = TaskbarEdge::Bottom;
     bool isVertical = false;
     HWND hWnd = nullptr;
-    std::optional<TaskbarEdge> configuredEdge;
-    std::chrono::steady_clock::time_point lastEdgeCheck{};
 };
 
 struct TaskbarThreadState {
@@ -732,35 +788,12 @@ HWND GetCurrentThreadTrayWindow() {
     return fallback;
 }
 
-static std::optional<TaskbarEdge> DecodeConfiguredTaskbarEdge(DWORD edge) {
-    switch (edge) {
-        case 0: return TaskbarEdge::Left;
-        case 1: return TaskbarEdge::Top;
-        case 2: return TaskbarEdge::Right;
-        case 3: return TaskbarEdge::Bottom;
-        default: return std::nullopt;
-    }
-}
-
-static std::optional<TaskbarEdge> ReadConfiguredPrimaryTaskbarEdge() {
-    DWORD settings[64]{};
-    DWORD size = sizeof(settings);
-    if (RegGetValueW(HKEY_CURRENT_USER,
-                    LR"(Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3)",
-                    L"Settings", RRF_RT_REG_BINARY, nullptr, settings, &size) != ERROR_SUCCESS ||
-        size < 4 * sizeof(DWORD) || settings[0] < 4 * sizeof(DWORD) || settings[0] > size) {
-        return std::nullopt;
-    }
-    return DecodeConfiguredTaskbarEdge(settings[3]);
-}
-
-static TaskbarEdge ResolveTaskbarEdge(TaskbarEdge windowEdge,
-                                      std::optional<TaskbarEdge> configuredEdge) {
-    // Native Insider layouts can move the XAML taskbar while retaining a
-    // bottom Shell_TrayWnd. Keep actual non-bottom window placements from
-    // other mods, and consult the saved primary edge for the retained host.
-    return windowEdge == TaskbarEdge::Bottom && configuredEdge
-        ? *configuredEdge : windowEdge;
+static std::optional<TaskbarEdge> ParseTaskbarPosition(std::wstring_view value) {
+    if (value == L"bottom") return TaskbarEdge::Bottom;
+    if (value == L"top") return TaskbarEdge::Top;
+    if (value == L"left") return TaskbarEdge::Left;
+    if (value == L"right") return TaskbarEdge::Right;
+    return std::nullopt;
 }
 
 static void ApplyTaskbarEdge(DockAnimationContext& ctx, TaskbarEdge edge) {
@@ -784,13 +817,9 @@ void UpdateTaskbarEdge(DockAnimationContext& ctx) {
         ctx.hWnd = hWnd;
     }
 
-    const auto now = std::chrono::steady_clock::now();
-    if (now - ctx.lastEdgeCheck >= std::chrono::milliseconds(120)) {
-        ctx.lastEdgeCheck = now;
-        // A secondary monitor may use a different edge. Never apply the
-        // primary monitor's saved placement to a secondary taskbar.
-        ctx.configuredEdge = hWnd && hWnd == FindWindowW(L"Shell_TrayWnd", nullptr)
-            ? ReadConfiguredPrimaryTaskbarEdge() : std::nullopt;
+    if (g_settings.taskbarPosition) {
+        ApplyTaskbarEdge(ctx, *g_settings.taskbarPosition);
+        return;
     }
 
     TaskbarEdge edge = ctx.edge;
@@ -811,7 +840,7 @@ void UpdateTaskbarEdge(DockAnimationContext& ctx) {
         const bool vertical = frame.ActualWidth() < frame.ActualHeight();
         if (vertical != ctx.isVertical) edge = vertical ? TaskbarEdge::Left : TaskbarEdge::Bottom;
     }
-    ApplyTaskbarEdge(ctx, ResolveTaskbarEdge(edge, ctx.configuredEdge));
+    ApplyTaskbarEdge(ctx, edge);
 }
 
 // Simple visual tree helpers
@@ -1952,6 +1981,8 @@ int ReadChoice(PCWSTR key, Args... args) {
 }
 
 void LoadSettings() {
+    WindhawkUtils::StringSetting position(Wh_GetStringSetting(L"TaskbarPosition"));
+    g_settings.taskbarPosition = ParseTaskbarPosition(position.get());
     int rawScale = Wh_GetIntSetting(L"MaxScale");
 
     if (rawScale < 101) {
