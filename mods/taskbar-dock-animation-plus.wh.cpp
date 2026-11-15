@@ -20,7 +20,7 @@
 // @homepage          https://incconutwo.com
 // @include           explorer.exe
 // @architecture      x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshcore -lwindowsapp -luser32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lshcore -lwindowsapp -luser32 -ladvapi32
 // ==/WindhawkMod==
 
 /*
@@ -659,7 +659,8 @@ struct DockAnimationContext {
     TaskbarEdge lastLayoutEdge = TaskbarEdge::Bottom;
     bool isVertical = false;
     HWND hWnd = nullptr;
-    RECT lastTrayRect = {0, 0, 0, 0};
+    std::optional<TaskbarEdge> configuredEdge;
+    std::chrono::steady_clock::time_point lastEdgeCheck{};
 };
 
 struct TaskbarThreadState {
@@ -731,6 +732,48 @@ HWND GetCurrentThreadTrayWindow() {
     return fallback;
 }
 
+static std::optional<TaskbarEdge> DecodeConfiguredTaskbarEdge(DWORD edge) {
+    switch (edge) {
+        case 0: return TaskbarEdge::Left;
+        case 1: return TaskbarEdge::Top;
+        case 2: return TaskbarEdge::Right;
+        case 3: return TaskbarEdge::Bottom;
+        default: return std::nullopt;
+    }
+}
+
+static std::optional<TaskbarEdge> ReadConfiguredPrimaryTaskbarEdge() {
+    DWORD settings[64]{};
+    DWORD size = sizeof(settings);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                    LR"(Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3)",
+                    L"Settings", RRF_RT_REG_BINARY, nullptr, settings, &size) != ERROR_SUCCESS ||
+        size < 4 * sizeof(DWORD) || settings[0] < 4 * sizeof(DWORD) || settings[0] > size) {
+        return std::nullopt;
+    }
+    return DecodeConfiguredTaskbarEdge(settings[3]);
+}
+
+static TaskbarEdge ResolveTaskbarEdge(TaskbarEdge windowEdge,
+                                      std::optional<TaskbarEdge> configuredEdge) {
+    // Native Insider layouts can move the XAML taskbar while retaining a
+    // bottom Shell_TrayWnd. Keep actual non-bottom window placements from
+    // other mods, and consult the saved primary edge for the retained host.
+    return windowEdge == TaskbarEdge::Bottom && configuredEdge
+        ? *configuredEdge : windowEdge;
+}
+
+static void ApplyTaskbarEdge(DockAnimationContext& ctx, TaskbarEdge edge) {
+    if (ctx.edge != edge) {
+        // Cached origins, footprints, pivots and indicator corrections belong
+        // to the previous axis. Never reuse them for even the first new frame.
+        ResetContext(ctx);
+        ctx.lastLayoutMouse = -1.0;
+    }
+    ctx.edge = edge;
+    ctx.isVertical = edge == TaskbarEdge::Left || edge == TaskbarEdge::Right;
+}
+
 void UpdateTaskbarEdge(DockAnimationContext& ctx) {
     auto frame = ctx.taskbarFrame.get();
     if (!frame) return;
@@ -741,56 +784,34 @@ void UpdateTaskbarEdge(DockAnimationContext& ctx) {
         ctx.hWnd = hWnd;
     }
 
-    if (!hWnd) {
-        if (frame.ActualWidth() < frame.ActualHeight()) {
-            ctx.edge = TaskbarEdge::Left;
-        } else {
-            ctx.edge = TaskbarEdge::Bottom;
-        }
-        ctx.isVertical = (ctx.edge == TaskbarEdge::Left || ctx.edge == TaskbarEdge::Right);
-        return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - ctx.lastEdgeCheck >= std::chrono::milliseconds(120)) {
+        ctx.lastEdgeCheck = now;
+        // A secondary monitor may use a different edge. Never apply the
+        // primary monitor's saved placement to a secondary taskbar.
+        ctx.configuredEdge = hWnd && hWnd == FindWindowW(L"Shell_TrayWnd", nullptr)
+            ? ReadConfiguredPrimaryTaskbarEdge() : std::nullopt;
     }
 
-    RECT rect = {0};
-    if (GetWindowRect(hWnd, &rect)) {
-        if (rect.left == ctx.lastTrayRect.left &&
-            rect.top == ctx.lastTrayRect.top &&
-            rect.right == ctx.lastTrayRect.right &&
-            rect.bottom == ctx.lastTrayRect.bottom) {
-            return;
-        }
-
-        ctx.lastTrayRect = rect;
-
-        LONG w = rect.right - rect.left;
-        LONG h = rect.bottom - rect.top;
-        if (w < h) {
-            HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-            MONITORINFO mi = { sizeof(mi) };
-            if (GetMonitorInfo(hMonitor, &mi)) {
-                if (rect.left <= mi.rcMonitor.left + (mi.rcMonitor.right - mi.rcMonitor.left) / 2) {
-                    ctx.edge = TaskbarEdge::Left;
-                } else {
-                    ctx.edge = TaskbarEdge::Right;
-                }
-            } else {
-                ctx.edge = TaskbarEdge::Left;
-            }
+    TaskbarEdge edge = ctx.edge;
+    RECT rect{};
+    MONITORINFO mi{sizeof(mi)};
+    if (hWnd && GetWindowRect(hWnd, &rect) &&
+        GetMonitorInfoW(MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+        if (rect.right - rect.left < rect.bottom - rect.top) {
+            edge = rect.left <= mi.rcMonitor.left + (mi.rcMonitor.right - mi.rcMonitor.left) / 2
+                ? TaskbarEdge::Left : TaskbarEdge::Right;
         } else {
-            HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-            MONITORINFO mi = { sizeof(mi) };
-            if (GetMonitorInfo(hMonitor, &mi)) {
-                if (rect.top <= mi.rcMonitor.top + (mi.rcMonitor.bottom - mi.rcMonitor.top) / 2) {
-                    ctx.edge = TaskbarEdge::Top;
-                } else {
-                    ctx.edge = TaskbarEdge::Bottom;
-                }
-            } else {
-                ctx.edge = TaskbarEdge::Bottom;
-            }
+            edge = rect.top <= mi.rcMonitor.top + (mi.rcMonitor.bottom - mi.rcMonitor.top) / 2
+                ? TaskbarEdge::Top : TaskbarEdge::Bottom;
         }
-        ctx.isVertical = (ctx.edge == TaskbarEdge::Left || ctx.edge == TaskbarEdge::Right);
+    } else {
+        // When geometry is temporarily unavailable, preserve the known side
+        // if its axis still agrees with the live XAML layout.
+        const bool vertical = frame.ActualWidth() < frame.ActualHeight();
+        if (vertical != ctx.isVertical) edge = vertical ? TaskbarEdge::Left : TaskbarEdge::Bottom;
     }
+    ApplyTaskbarEdge(ctx, ResolveTaskbarEdge(edge, ctx.configuredEdge));
 }
 
 // Simple visual tree helpers
