@@ -50,6 +50,61 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 /*
 # Taskbar Dock Animation Plus
 
+This mod animates taskbar icons on mouse hover like in macOS.
+
+This is an updated fork of the original Taskbar Dock Animation mod, adding compatibility for all taskbar positions and key stability improvements.
+
+**Requires Windows 11 or newer to function.**
+
+---
+
+### ![Sparkles](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/sparkles.svg) Key Additions in this Fork
+* **Support for all Taskbar Placements**: Works seamlessly on Bottom, Top, Left, and Right taskbar positions.
+* **Multi-Monitor Stability**: Fixes crashes and compatibility issues when using multiple screens or monitors.
+* **Smoother Animations**: The idle "breathing" / bounce animation now fades in and out smoothly instead of snapping abruptly.
+* **Instant Settings & Position Updates**: Updates settings and positions in real time as you configure them or move the taskbar, with no restarts required.
+
+---
+
+### ![Triangle Alert](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/triangle-alert.svg) Known Issues & Limitations
+* Icons are sometimes clipped by the taskbar.
+* Upscaled icons may appear slightly blurry.
+
+"Taskbar height and icon size" Users: If you are using this mod to create a minimalistic taskbar, please keep the Max Scale at or below 130% to avoid clipping issues. This recommendation applies to other scaling mods as well.
+Dell / Alienware Users: If you encounter specific issues on these devices, please reach out to me directly or open an issue so we can investigate together.
+StartAllBack Compatibility: This mod does not and will not support StartAllBack. Supporting it would require a complete rewrite of the codebase, which is currently out of scope.
+Feedback: Feel free to suggest new animation ideas or curves in the mod topic or via direct message!
+
+You can experiment with the **radius** value to achieve the best result for your setup until proper fixes for the issues above are found.
+
+---
+
+### ![Globe](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/globe.svg) Author & Support
+
+If you enjoy this mod and want to support its continued development:
+* **Personal Website & Projects:** [incconutwo.com](https://incconutwo.com)
+* **Support My Work:** [Ko-fi](https://ko-fi.com/incconutwo)
+* **GitHub Profile:** [github.com/incconutwo](https://github.com/incconutwo)
+* **X (Twitter):** [@tnemoroccan](https://x.com/tnemoroccan)
+
+---
+
+### ![Heart](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/heart.svg) Credits
+This mod is a fork of the original [Taskbar Dock Animation](https://windhawk.net/mods/taskbar-dock-animation) mod created by [@Ph0en1x-dev](https://github.com/Ph0en1x-dev). All original logic and visual concepts belong to the original author.
+
+---
+
+## ![Image](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/image.svg) Preview
+![Taskbar Dock Animation Preview](https://raw.githubusercontent.com/Ph0en1x-dev/Hlam/refs/heads/main/Screen-recording-2025-11-06-155028.gif)
+
+---
+
+## Version 2.1.0 additions / 2.1.0 新增内容
+
+The original Plus description, support information, credits, and preview above are retained. The following sections describe the integrated additions and current test footage. Where the original notes recommend 130%, the new content-fit corrections reduce early clipping, but do not remove the taskbar's physical size limits. Use the compatibility notes below for this version.
+
+以上保留 Plus 原有介绍、支持方式、致谢和演示。以下补充本次整合的新功能与实录。原说明建议从 130% 开始；新的边界校正改善提前裁切，但任务栏仍有物理尺寸限制，请结合下方本版本兼容性说明使用。
+
 Dock-style magnification for the Windows 11 taskbar. Use a flowing wave across neighboring buttons, enlarge only the hovered button, or keep selected applications at their normal size.
 
 ![Plus wave animation recorded on Windows 11](https://raw.githubusercontent.com/PDSB001/windhawk-mods/refs/heads/integrate/dock-profiles-composition/assets/taskbar-dock-animation-plus/previews/wave.gif)
@@ -115,7 +170,7 @@ The submitter reports that the Plus 2.1.0 desktop test passed on **Windows 11 Pr
 
 提交者已确认 Plus 2.1.0 在上述系统版本的桌面测试通过，整合 PR 附有录像和系统截图。严格 x64 编译及 10,000 组布局检查通过。各类按应用配置和其他任务栏位置仍应按实际使用环境单独检查。
 
-## Credits and support
+## Integration credits / 整合贡献
 
 [Ph0en1x-dev](https://github.com/Ph0en1x-dev) created the original [Taskbar Dock Animation](https://windhawk.net/mods/taskbar-dock-animation). [incconutwo](https://github.com/incconutwo) maintains Plus and contributed taskbar placement and multi-monitor adaptations. [PDSB001](https://github.com/PDSB001) contributed per-app rules, constrained wave layout, system tray filtering, Composition rendering, and lifecycle fixes. All three credits are preserved under MIT.
 
