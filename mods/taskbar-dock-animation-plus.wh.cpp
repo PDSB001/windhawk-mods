@@ -58,7 +58,7 @@ Bring macOS-style Dock magnification to the Windows 11 taskbar. Plus builds on t
 
 **Requires the Windows 11 XAML taskbar. / 需要 Windows 11 的 XAML 任务栏。**
 
-![Taskbar Dock Animation Plus in action](https://raw.githubusercontent.com/PDSB001/windhawk-mods/refs/heads/integrate/dock-profiles-composition/assets/taskbar-dock-animation-plus/previews/wave.gif)
+![Taskbar Dock Animation Plus in action](https://cdn.jsdelivr.net/gh/PDSB001/windhawk-mods@db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/wave.gif)
 
 ## ![Sparkles](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/sparkles.svg) Features / 功能
 
@@ -96,7 +96,7 @@ If automatic detection gives the wrong direction, choose the actual edge in **Ta
 
 自动识别方向不对时，在“任务栏位置”选择实际的底部、顶部、左侧或右侧。手动选择对所有任务栏生效，只控制动画，不会移动 Windows 任务栏。各显示器位置不同时，可在识别正常的情况下使用自动模式。
 
-![Bottom, top, left, and right taskbar previews](https://raw.githubusercontent.com/PDSB001/windhawk-mods/refs/heads/integrate/dock-profiles-composition/assets/taskbar-dock-animation-plus/previews/four-positions.gif)
+![Bottom, top, left, and right taskbar previews](https://cdn.jsdelivr.net/gh/PDSB001/windhawk-mods@db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/four-positions.gif)
 
 Four separate excerpts from the same desktop recording; vertical views are shown at 50% size. / 四边为同一段实录中不同时间的片段，纵向预览缩小至一半展示。
 
@@ -106,7 +106,7 @@ Start at **130%** maximum scale, then tune the **radius** and spacing for your l
 
 建议从 **130%** 最大倍率开始，再按布局调节半径和间距。“仅放大悬停图标”决定没有应用规则时的全局模式；任务栏显示窗口标题时，可启用“任务栏标签兼容模式”。
 
-![Default and small taskbar sizes](https://raw.githubusercontent.com/PDSB001/windhawk-mods/refs/heads/integrate/dock-profiles-composition/assets/taskbar-dock-animation-plus/previews/taskbar-sizes.gif)
+![Default and small taskbar sizes](https://cdn.jsdelivr.net/gh/PDSB001/windhawk-mods@db6cceac37ce85b8282828915e32ac16cf60e871/assets/taskbar-dock-animation-plus/previews/taskbar-sizes.gif)
 
 Both rows retain the source pixel scale. / 默认与小号两行保留原录像的像素比例。
 
@@ -760,6 +760,12 @@ struct IconTransforms {
     }
 };
 
+static void ApplyIconPose(IconTransforms& transforms, const IconPose& pose,
+                          AppAnimationMode mode, const CrossAxisInsets& insets) {
+    if (mode == AppAnimationMode::Off) transforms.Restore();
+    else transforms.Apply(pose, insets);
+}
+
 void SetIconPivot(IconTransforms& transforms, FrameworkElement const& element,
                   bool vertical, TaskbarEdge edge) {
     const float width = static_cast<float>(element.ActualWidth());
@@ -809,8 +815,14 @@ struct HostSignature {
 
 // Event callbacks retain only this signal, never a context or taskbar visual.
 struct LayoutDirtySignal {
+    std::atomic<bool> contentDirty{false};
     std::atomic<bool> geometryDirty{true};
     std::atomic<bool> indicatorsDirty{true};
+};
+
+struct ContentSizeWatch {
+    winrt::weak_ref<FrameworkElement> element;
+    winrt::event_token token;
 };
 
 struct IndicatorVisibilityWatch {
@@ -835,6 +847,9 @@ struct DockAnimationContext {
     winrt::event_token layoutToken{};
     bool layoutSubscribed = false;
     std::vector<IndicatorVisibilityWatch> indicatorVisibilityWatches;
+    std::vector<ContentSizeWatch> contentSizeWatches;
+    bool contentNeedsRefresh = false;
+    std::chrono::steady_clock::time_point lastContentCheck{};
     std::chrono::steady_clock::time_point lastGeometryCheck{};
     bool needsFrame = true;
     double lastLayoutMouse = -1.0;
@@ -877,20 +892,111 @@ void ResetAllIconScales(std::vector<TaskbarIconInfo>& icons);
 void RefreshIconPositions(DockAnimationContext& ctx);
 void OnCompositionTargetRendering();
 
+// Hold a spare loader reference before any callback can be registered. The
+// engine still holds its own reference while Wh_ModUninit runs, so releasing
+// the spare on the normal path cannot unload code underneath this function.
+HMODULE g_callbackModuleReference = nullptr;
+std::atomic<bool> g_preserveCallbackModule = false;
+
+bool AcquireCallbackModuleReference() {
+    return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        reinterpret_cast<LPCWSTR>(&AcquireCallbackModuleReference), &g_callbackModuleReference);
+}
+
+void PreserveCallbackModule() {
+    if (!g_preserveCallbackModule.exchange(true)) {
+        Wh_Log(L"DockAnimation: Callback cleanup failed; retaining this DLL until Explorer exits.");
+    }
+}
+
+void ReleaseCallbackModuleReference() {
+    if (!g_preserveCallbackModule && g_callbackModuleReference) {
+        const auto module = std::exchange(g_callbackModuleReference, nullptr);
+        FreeLibrary(module);
+    }
+}
+
+enum class PendingSubscriptionKind { Layout, Visibility, Size, Rendering };
+struct PendingSubscription {
+    PendingSubscriptionKind kind;
+    winrt::weak_ref<FrameworkElement> element;
+    int64_t token;
+};
+// Retry only on the owning UI thread. Failed cleanup never releases UI state
+// or its delegate code on the engine thread.
+[[clang::no_destroy]] std::map<DWORD, std::vector<PendingSubscription>> g_pendingSubscriptions;
+
+void QueuePendingSubscription(PendingSubscriptionKind kind,
+                              winrt::weak_ref<FrameworkElement> element, int64_t token) {
+    PreserveCallbackModule();
+    try {
+        g_pendingSubscriptions[GetCurrentThreadId()].push_back({kind, element, token});
+    } catch (...) {
+        // The spare module reference still protects any live delegate if an
+        // allocation fails while saving its retry token.
+        Wh_Log(L"DockAnimation: Could not store a callback cleanup token.");
+    }
+}
+
+void RetryPendingSubscriptions() {
+    auto thread = g_pendingSubscriptions.find(GetCurrentThreadId());
+    if (thread == g_pendingSubscriptions.end()) return;
+    auto& pending = thread->second;
+    for (auto it = pending.begin(); it != pending.end();) {
+        try {
+            if (it->kind == PendingSubscriptionKind::Rendering) {
+                Media::CompositionTarget::Rendering(winrt::event_token{it->token});
+            } else if (auto element = it->element.get()) {
+                switch (it->kind) {
+                    case PendingSubscriptionKind::Layout:
+                        element.LayoutUpdated(winrt::event_token{it->token}); break;
+                    case PendingSubscriptionKind::Visibility:
+                        element.UnregisterPropertyChangedCallback(UIElement::VisibilityProperty(), it->token); break;
+                    case PendingSubscriptionKind::Size:
+                        element.SizeChanged(winrt::event_token{it->token}); break;
+                    default: break;
+                }
+            }
+            it = pending.erase(it);
+        } catch (const winrt::hresult_error&) {
+            ++it;
+        }
+    }
+    if (pending.empty()) g_pendingSubscriptions.erase(thread);
+}
+
 void StopRendering(TaskbarThreadState& state) {
     if (state.renderingWindow) {
-        Media::CompositionTarget::Rendering(state.renderingToken);
+        try {
+            Media::CompositionTarget::Rendering(state.renderingToken);
+        } catch (const winrt::hresult_error&) {
+            QueuePendingSubscription(PendingSubscriptionKind::Rendering, {}, state.renderingToken.value);
+        }
         state.renderingWindow = nullptr;
     }
 }
 
+void StopContentSizeWatch(DockAnimationContext& ctx) {
+    RetryPendingSubscriptions();
+    for (const auto& watch : ctx.contentSizeWatches) {
+        try {
+            if (auto element = watch.element.get()) element.SizeChanged(watch.token);
+        } catch (const winrt::hresult_error&) {
+            QueuePendingSubscription(PendingSubscriptionKind::Size, watch.element, watch.token.value);
+        }
+    }
+    ctx.contentSizeWatches.clear();
+}
+
 void StopLayoutWatch(DockAnimationContext& ctx) {
-    // Called on the taskbar owner thread, before releasing cached visuals.
     ctx.layoutSignal.reset();
+    StopContentSizeWatch(ctx);
     if (ctx.layoutSubscribed) {
         try {
             if (auto frame = ctx.taskbarFrame.get()) frame.LayoutUpdated(ctx.layoutToken);
-        } catch (const winrt::hresult_error&) {}
+        } catch (const winrt::hresult_error&) {
+            QueuePendingSubscription(PendingSubscriptionKind::Layout, ctx.taskbarFrame, ctx.layoutToken.value);
+        }
         ctx.layoutSubscribed = false;
     }
     for (const auto& watch : ctx.indicatorVisibilityWatches) {
@@ -898,12 +1004,16 @@ void StopLayoutWatch(DockAnimationContext& ctx) {
             if (auto element = watch.element.get()) {
                 element.UnregisterPropertyChangedCallback(UIElement::VisibilityProperty(), watch.token);
             }
-        } catch (const winrt::hresult_error&) {}
+        } catch (const winrt::hresult_error&) {
+            QueuePendingSubscription(PendingSubscriptionKind::Visibility, watch.element, watch.token);
+        }
     }
     ctx.indicatorVisibilityWatches.clear();
 }
 
 void StartLayoutWatch(DockAnimationContext& ctx, FrameworkElement const& frame) {
+    // Do not accumulate new subscriptions while failed old ones await retry.
+    if (g_pendingSubscriptions.contains(GetCurrentThreadId())) return;
     ctx.layoutSignal = std::make_shared<LayoutDirtySignal>();
     const std::weak_ptr<LayoutDirtySignal> weak = ctx.layoutSignal;
     try {
@@ -917,7 +1027,7 @@ void StartLayoutWatch(DockAnimationContext& ctx, FrameworkElement const& frame) 
 }
 
 void WatchIndicatorVisibility(DockAnimationContext& ctx, FrameworkElement const& element) {
-    if (!ctx.layoutSignal) return;
+    if (!ctx.layoutSignal || g_pendingSubscriptions.contains(GetCurrentThreadId())) return;
     const std::weak_ptr<LayoutDirtySignal> weak = ctx.layoutSignal;
     try {
         // Reserve storage before registering so an allocation failure cannot
@@ -939,6 +1049,25 @@ void WatchIndicatorVisibility(DockAnimationContext& ctx, FrameworkElement const&
     } catch (const winrt::hresult_error&) {}
 }
 
+void WatchContentSize(DockAnimationContext& ctx, FrameworkElement const& element) {
+    if (!ctx.layoutSignal || g_pendingSubscriptions.contains(GetCurrentThreadId())) return;
+    const std::weak_ptr<LayoutDirtySignal> weak = ctx.layoutSignal;
+    try {
+        ctx.contentSizeWatches.push_back({element, {}});
+        try {
+            ctx.contentSizeWatches.back().token = element.SizeChanged([weak](auto const&, auto const&) {
+                if (auto signal = weak.lock()) {
+                    signal->contentDirty.store(true, std::memory_order_relaxed);
+                    signal->geometryDirty.store(true, std::memory_order_relaxed);
+                }
+            });
+        } catch (...) {
+            ctx.contentSizeWatches.pop_back();
+            throw;
+        }
+    } catch (const winrt::hresult_error&) {}
+}
+
 void ResetContext(DockAnimationContext& ctx) {
     StopLayoutWatch(ctx);
     ResetAllIconScales(ctx.icons);
@@ -947,6 +1076,7 @@ void ResetContext(DockAnimationContext& ctx) {
     ctx.icons.clear();
     ctx.indicatorInsets = {};
     ctx.measureIndicators = true;
+    ctx.contentNeedsRefresh = false;
 }
 
 HMODULE GetTaskbarViewModuleHandle();
@@ -1310,7 +1440,7 @@ bool ApplyAnimation(double mouseX, DockAnimationContext& ctx, double intensity,
                 else pose.bounceY = bounceTranslateOffset;
             }
         }
-        icon.transforms.Apply(pose, ctx.indicatorInsets);
+        ApplyIconPose(icon.transforms, pose, modeOf(icon), ctx.indicatorInsets);
     }
     return settling;
 }
@@ -1351,6 +1481,14 @@ void OnTaskbarPointerMoved(TaskbarThreadState& state, void* key,
     state.mouseX = mousePos;
 
     if (!state.renderingWindow) {
+        RetryPendingSubscriptions();
+        if (auto pending = g_pendingSubscriptions.find(GetCurrentThreadId());
+            pending != g_pendingSubscriptions.end() && std::any_of(pending->second.begin(), pending->second.end(),
+                [](const auto& subscription) { return subscription.kind == PendingSubscriptionKind::Rendering; })) {
+            // An old frame delegate is still alive. Leave it gated off rather
+            // than registering a duplicate until revocation succeeds.
+            return;
+        }
         state.renderingToken = Media::CompositionTarget::Rendering(
             [](auto const&, auto const&) { OnCompositionTargetRendering(); });
         state.renderingWindow = ctx.hWnd;
@@ -1512,6 +1650,94 @@ static winrt::Windows::Foundation::Point GetIconLayoutOrigin(
     if (!parent) throw winrt::hresult_error(E_FAIL);
     const auto offset = element.ActualOffset();
     return parent.TransformToVisual(frame).TransformPoint({offset.x, offset.y});
+}
+
+static bool MeasureIconContent(DockAnimationContext& ctx, TaskbarIconInfo& info,
+                        FrameworkElement const& element) {
+    const double oldStart = info.footprintStart, oldEnd = info.footprintEnd;
+    const float oldCrossStart = info.transforms.crossStart, oldCrossEnd = info.transforms.crossEnd;
+    const bool oldFullSlot = info.fullSlotFootprint;
+    info.footprintStart = 0.0;
+    info.footprintEnd = 1.0;
+    info.transforms.crossStart = info.transforms.crossEnd = 0.0f;
+    info.fullSlotFootprint = UseFullSlotFootprint(
+        winrt::get_class_name(element) == L"Taskbar.TaskListButton",
+        info.elementWidth, info.transforms.crossExtent);
+    if (info.elementWidth > 0.0) {
+        const bool isAppButton = winrt::get_class_name(element) == L"Taskbar.TaskListButton";
+        info.fullSlotFootprint = UseFullSlotFootprint(
+            isAppButton, info.elementWidth, info.transforms.crossExtent);
+        std::optional<winrt::Windows::Foundation::Rect> content;
+        const auto findFootprint = [&](auto const& self, FrameworkElement const& parent) -> void {
+            EnumChildElements(parent, [&](FrameworkElement child) {
+                if (child.Visibility() != Visibility::Visible) return false;
+                // Indicators, backgrounds and labels are not app glyphs.
+                const auto name = child.Name();
+                if (name == L"RunningIndicator" || name == L"ProgressIndicator") return false;
+                const auto type = winrt::get_class_name(child);
+                const std::wstring_view typeName(type);
+                const bool simpleShape = typeName.ends_with(L".Shapes.Rectangle") ||
+                    typeName.ends_with(L".Shapes.Ellipse") || typeName.ends_with(L".Shapes.Polygon");
+                const bool glyph = child.try_as<Controls::Image>() ||
+                    child.try_as<Controls::IconElement>() ||
+                    (!isAppButton && (typeName.ends_with(L".AnimatedIcon") ||
+                        typeName.ends_with(L".AnimatedVisualPlayer") ||
+                        typeName.ends_with(L".Shapes.Path") || simpleShape ||
+                        child.try_as<Controls::TextBlock>()));
+                if (glyph) {
+                    WatchContentSize(ctx, child);
+                    const auto bounds = child.TransformToVisual(element).TransformBounds({
+                        0.0f, 0.0f, static_cast<float>(child.ActualWidth()),
+                        static_cast<float>(child.ActualHeight())});
+                    const float start = ctx.isVertical ? bounds.Y : bounds.X;
+                    const float width = ctx.isVertical ? bounds.Height : bounds.Width;
+                    const float crossStart = ctx.isVertical ? bounds.X : bounds.Y;
+                    const float crossSize = ctx.isVertical ? bounds.Width : bounds.Height;
+                    const bool buttonBackground = simpleShape &&
+                        (bounds.Width >= element.ActualWidth() * 0.9 ||
+                         bounds.Height >= element.ActualHeight() * 0.9);
+                    if (!buttonBackground && start >= 0.0f && start + width <= info.elementWidth &&
+                        crossStart >= 0.0f && crossStart + crossSize <= info.transforms.crossExtent &&
+                        (!isAppButton || width >= 12.0f)) {
+                        // A system glyph can contain multiple paths or widget
+                        // text blocks. Keep their union, not just one fragment.
+                        IncludeIconContentBounds(content, bounds, isAppButton);
+                    }
+                }
+                self(self, child);
+                return false;
+            });
+        };
+        findFootprint(findFootprint, element);
+        if (content) {
+            const float start = ctx.isVertical ? content->Y : content->X;
+            const float width = ctx.isVertical ? content->Height : content->Width;
+            // Application labels retain the full native slot for layout.
+            if (!info.fullSlotFootprint && (!g_settings.taskbarLabelsMode || !isAppButton)) {
+                info.footprintStart = start / info.elementWidth;
+                info.footprintEnd = (start + width) / info.elementWidth;
+            }
+            info.transforms.crossStart = ctx.isVertical ? content->X : content->Y;
+            info.transforms.crossEnd = info.transforms.crossStart +
+                (ctx.isVertical ? content->Width : content->Height);
+        }
+    }
+
+    return oldStart != info.footprintStart || oldEnd != info.footprintEnd ||
+        oldCrossStart != info.transforms.crossStart || oldCrossEnd != info.transforms.crossEnd ||
+        oldFullSlot != info.fullSlotFootprint;
+}
+
+static void RefreshContentGeometry(DockAnimationContext& ctx) {
+    StopContentSizeWatch(ctx);
+    bool changed = false;
+    for (auto& icon : ctx.icons) {
+        if (auto element = icon.element.get()) changed |= MeasureIconContent(ctx, icon, element);
+    }
+    if (changed) ctx.indicatorInsets = {};
+    ctx.contentNeedsRefresh = false;
+    ctx.measureIndicators = true;
+    ctx.lastContentCheck = std::chrono::steady_clock::now();
 }
 
 static bool RebaseIconGeometryFast(DockAnimationContext& ctx) {
@@ -1779,64 +2005,7 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
             }
             info.elementWidth = ctx.isVertical ? element.ActualHeight() : element.ActualWidth();
 
-            if (info.elementWidth > 0.0) {
-                const bool isAppButton = IsTaskListButtonExact(element);
-                info.fullSlotFootprint = UseFullSlotFootprint(
-                    isAppButton, info.elementWidth, info.transforms.crossExtent);
-                std::optional<winrt::Windows::Foundation::Rect> content;
-                const auto findFootprint = [&](auto const& self, FrameworkElement const& parent) -> void {
-                    EnumChildElements(parent, [&](FrameworkElement child) {
-                        if (child.Visibility() != Visibility::Visible) return false;
-                        // Indicators, backgrounds and labels are not app glyphs.
-                        const auto name = child.Name();
-                        if (name == L"RunningIndicator" || name == L"ProgressIndicator") return false;
-                        const auto type = winrt::get_class_name(child);
-                        const std::wstring_view typeName(type);
-                        const bool simpleShape = typeName.ends_with(L".Shapes.Rectangle") ||
-                            typeName.ends_with(L".Shapes.Ellipse") || typeName.ends_with(L".Shapes.Polygon");
-                        const bool glyph = child.try_as<Controls::Image>() ||
-                            child.try_as<Controls::IconElement>() ||
-                            (!isAppButton && (typeName.ends_with(L".AnimatedIcon") ||
-                                typeName.ends_with(L".AnimatedVisualPlayer") ||
-                                typeName.ends_with(L".Shapes.Path") || simpleShape ||
-                                child.try_as<Controls::TextBlock>()));
-                        if (glyph) {
-                            const auto bounds = child.TransformToVisual(element).TransformBounds({
-                                0.0f, 0.0f, static_cast<float>(child.ActualWidth()),
-                                static_cast<float>(child.ActualHeight())});
-                            const float start = ctx.isVertical ? bounds.Y : bounds.X;
-                            const float width = ctx.isVertical ? bounds.Height : bounds.Width;
-                            const float crossStart = ctx.isVertical ? bounds.X : bounds.Y;
-                            const float crossSize = ctx.isVertical ? bounds.Width : bounds.Height;
-                            const bool buttonBackground = simpleShape &&
-                                (bounds.Width >= element.ActualWidth() * 0.9 ||
-                                 bounds.Height >= element.ActualHeight() * 0.9);
-                            if (!buttonBackground && start >= 0.0f && start + width <= info.elementWidth &&
-                                crossStart >= 0.0f && crossStart + crossSize <= info.transforms.crossExtent &&
-                                (!isAppButton || width >= 12.0f)) {
-                                // A system glyph can contain multiple paths or widget
-                                // text blocks. Keep their union, not just one fragment.
-                                IncludeIconContentBounds(content, bounds, isAppButton);
-                            }
-                        }
-                        self(self, child);
-                        return false;
-                    });
-                };
-                findFootprint(findFootprint, element);
-                if (content) {
-                    const float start = ctx.isVertical ? content->Y : content->X;
-                    const float width = ctx.isVertical ? content->Height : content->Width;
-                    // Application labels retain the full native slot for layout.
-                    if (!info.fullSlotFootprint && (!g_settings.taskbarLabelsMode || !isAppButton)) {
-                        info.footprintStart = start / info.elementWidth;
-                        info.footprintEnd = (start + width) / info.elementWidth;
-                    }
-                    info.transforms.crossStart = ctx.isVertical ? content->X : content->Y;
-                    info.transforms.crossEnd = info.transforms.crossStart +
-                        (ctx.isVertical ? content->Width : content->Height);
-                }
-            }
+            MeasureIconContent(ctx, info, element);
 
             info.originalCenterX = (ctx.isVertical ? point.Y : point.X) +
                                    (g_settings.taskbarLabelsMode ? 0.0 : info.elementWidth / 2.0);
@@ -1985,7 +2154,10 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
             });
 
         ctx.icons = std::move(newIcons);
+        ctx.indicatorInsets = {};
         ctx.lastGeometryCheck = std::chrono::steady_clock::now();
+        ctx.lastContentCheck = ctx.lastGeometryCheck;
+        ctx.contentNeedsRefresh = false;
 
     } catch (winrt::hresult_error const& e) {
         Wh_Log(L"DockAnimation: HRESULT error during icon search: %s", e.message().c_str());
@@ -2055,6 +2227,10 @@ void OnCompositionTargetRendering() {
         }
 
         if (ctx.layoutSignal &&
+            ctx.layoutSignal->contentDirty.exchange(false, std::memory_order_relaxed)) {
+            ctx.contentNeedsRefresh = true;
+        }
+        if (ctx.layoutSignal &&
             ctx.layoutSignal->indicatorsDirty.exchange(false, std::memory_order_relaxed)) {
             ctx.measureIndicators = true;
             ctx.needsFrame = true;
@@ -2095,6 +2271,9 @@ void OnCompositionTargetRendering() {
                                 now - ctx.lastGeometryCheck);
                             if (ShouldRefreshGeometry(ctx.layoutSubscribed, dirty, elapsed)) {
                                 RebaseIconGeometryFast(ctx);
+                                if (ctx.contentNeedsRefresh || now - ctx.lastContentCheck >= std::chrono::seconds(1)) {
+                                    RefreshContentGeometry(ctx);
+                                }
                                 ctx.measureIndicators = true;
                                 ctx.needsFrame = true;
                                 ctx.lastGeometryCheck = now;
@@ -2363,6 +2542,12 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 
 // Windhawk entry points
 BOOL Wh_ModInit() {
+    // A DLL retained after failed cleanup still owns old delegate code. Do
+    // not reuse its globals for a new activation in the same Explorer process.
+    if (g_unloading.load()) {
+        Wh_Log(L"DockAnimation: Previous callback cleanup was incomplete; restart Explorer before enabling again.");
+        return FALSE;
+    }
     Wh_Log(L"DockAnimation: Wh_ModInit");
     LoadSettings();
 
@@ -2378,7 +2563,11 @@ BOOL Wh_ModInit() {
             LoadLibraryExW_Hook,
             &LoadLibraryExW_Original);
     }
-    return TRUE;
+    return AcquireCallbackModuleReference() ? TRUE : FALSE;
+}
+
+void Wh_ModUninit() {
+    ReleaseCallbackModuleReference();
 }
 
 typedef void (*RunFromWindowThreadProc_t)(PVOID);
@@ -2465,6 +2654,7 @@ void Wh_ModBeforeUninit() {
             }, &state)) {
             // Keep unreachable state alive rather than release its visuals
             // from the Windhawk engine thread.
+            PreserveCallbackModule();
             Wh_Log(L"DockAnimation: Could not reach taskbar thread %lu for cleanup.", threadId);
             ++it;
         } else {
