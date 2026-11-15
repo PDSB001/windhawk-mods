@@ -656,8 +656,15 @@ struct IconTransforms {
     float crossExtent = 0.0f;
     winrt::weak_ref<FrameworkElement> button;
     std::vector<IndicatorTransforms> indicators;
+    CrossAxisInsets cachedIndicatorInsets;
+    bool indicatorCacheValid = false;
 
-    CrossAxisInsets MeasureIndicatorInsets() {
+    CrossAxisInsets MeasureIndicatorInsets(bool refresh) {
+        if (indicatorCacheValid && !refresh) return cachedIndicatorInsets;
+        if (indicators.empty()) {
+            indicatorCacheValid = true;
+            return cachedIndicatorInsets = {};
+        }
         auto root = button.get();
         float lower = 0.0f;
         float upper = crossExtent;
@@ -691,6 +698,8 @@ struct IconTransforms {
         }
         CrossAxisInsets result;
         MergeIndicatorInsets(result, crossExtent, lower, upper);
+        cachedIndicatorInsets = result;
+        indicatorCacheValid = true;
         return result;
     }
 
@@ -701,7 +710,6 @@ struct IconTransforms {
                          static_cast<float>(pose.waveX * pose.bounceScaleX + pose.bounceX);
         float dy = pivotY * (1.0f - sy) +
                          static_cast<float>(pose.waveY * pose.bounceScaleY + pose.bounceY);
-        auto root = button.get();
         const float lower = sharedInsets.start * crossExtent;
         const float upper = (1.0f - sharedInsets.end) * crossExtent;
         if (vertical) dx = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sx, dx, lower, upper);
@@ -712,7 +720,7 @@ struct IconTransforms {
             visual.TransformMatrix(next);
             applied = next;
         }
-        if (root) {
+        if (!indicators.empty() && button.get()) {
             for (auto& indicator : indicators) {
                 try {
                     if (!indicator.layoutValid) continue;
@@ -784,6 +792,22 @@ struct HostSignature {
     uint64_t orderHash = 0;
 };
 
+// Event callbacks retain only this signal, never a context or taskbar visual.
+struct LayoutDirtySignal {
+    std::atomic<bool> geometryDirty{true};
+    std::atomic<bool> indicatorsDirty{true};
+};
+
+struct IndicatorVisibilityWatch {
+    winrt::weak_ref<FrameworkElement> element;
+    int64_t token;
+};
+
+static bool ShouldRefreshGeometry(bool subscribed, bool dirty,
+                                  std::chrono::milliseconds elapsed) {
+    return !subscribed || dirty || elapsed >= std::chrono::milliseconds(1000);
+}
+
 struct DockAnimationContext {
     bool isInitialized = false;
     winrt::weak_ref<FrameworkElement> taskbarFrame;
@@ -791,6 +815,12 @@ struct DockAnimationContext {
     std::vector<TaskbarIconInfo> icons;
     std::vector<DockWaveItem> waveScratch;
     CrossAxisInsets indicatorInsets;
+    bool measureIndicators = true;
+    std::shared_ptr<LayoutDirtySignal> layoutSignal;
+    winrt::event_token layoutToken{};
+    bool layoutSubscribed = false;
+    std::vector<IndicatorVisibilityWatch> indicatorVisibilityWatches;
+    std::chrono::steady_clock::time_point lastGeometryCheck{};
     bool needsFrame = true;
     double lastLayoutMouse = -1.0;
 
@@ -839,12 +869,69 @@ void StopRendering(TaskbarThreadState& state) {
     }
 }
 
+void StopLayoutWatch(DockAnimationContext& ctx) {
+    // Called on the taskbar owner thread, before releasing cached visuals.
+    ctx.layoutSignal.reset();
+    if (ctx.layoutSubscribed) {
+        try {
+            if (auto frame = ctx.taskbarFrame.get()) frame.LayoutUpdated(ctx.layoutToken);
+        } catch (const winrt::hresult_error&) {}
+        ctx.layoutSubscribed = false;
+    }
+    for (const auto& watch : ctx.indicatorVisibilityWatches) {
+        try {
+            if (auto element = watch.element.get()) {
+                element.UnregisterPropertyChangedCallback(UIElement::VisibilityProperty(), watch.token);
+            }
+        } catch (const winrt::hresult_error&) {}
+    }
+    ctx.indicatorVisibilityWatches.clear();
+}
+
+void StartLayoutWatch(DockAnimationContext& ctx, FrameworkElement const& frame) {
+    ctx.layoutSignal = std::make_shared<LayoutDirtySignal>();
+    const std::weak_ptr<LayoutDirtySignal> weak = ctx.layoutSignal;
+    try {
+        ctx.layoutToken = frame.LayoutUpdated([weak](auto const&, auto const&) {
+            if (auto signal = weak.lock()) signal->geometryDirty.store(true, std::memory_order_relaxed);
+        });
+        ctx.layoutSubscribed = true;
+    } catch (const winrt::hresult_error&) {
+        // The periodic path keeps the previous 120-ms behavior if subscribing fails.
+    }
+}
+
+void WatchIndicatorVisibility(DockAnimationContext& ctx, FrameworkElement const& element) {
+    if (!ctx.layoutSignal) return;
+    const std::weak_ptr<LayoutDirtySignal> weak = ctx.layoutSignal;
+    try {
+        // Reserve storage before registering so an allocation failure cannot
+        // leave a registered callback without its cleanup token.
+        ctx.indicatorVisibilityWatches.push_back({element, 0});
+        auto& watch = ctx.indicatorVisibilityWatches.back();
+        try {
+            watch.token = element.RegisterPropertyChangedCallback(UIElement::VisibilityProperty(),
+                [weak](auto const&, auto const&) {
+                    if (auto signal = weak.lock()) {
+                        signal->indicatorsDirty.store(true, std::memory_order_relaxed);
+                        signal->geometryDirty.store(true, std::memory_order_relaxed);
+                    }
+                });
+        } catch (...) {
+            ctx.indicatorVisibilityWatches.pop_back();
+            throw;
+        }
+    } catch (const winrt::hresult_error&) {}
+}
+
 void ResetContext(DockAnimationContext& ctx) {
+    StopLayoutWatch(ctx);
     ResetAllIconScales(ctx.icons);
     ctx.isInitialized = false;
     ctx.needsFrame = true;
     ctx.icons.clear();
     ctx.indicatorInsets = {};
+    ctx.measureIndicators = true;
 }
 
 HMODULE GetTaskbarViewModuleHandle();
@@ -1175,10 +1262,11 @@ bool ApplyAnimation(double mouseX, DockAnimationContext& ctx, double intensity,
     // no running strip. Retain it for this context so state changes do not
     // make the glyphs jump between different cross-axis alignments.
     for (auto& icon : ctx.icons) {
-        const auto insets = icon.transforms.MeasureIndicatorInsets();
+        const auto insets = icon.transforms.MeasureIndicatorInsets(ctx.measureIndicators);
         ctx.indicatorInsets.start = std::max(ctx.indicatorInsets.start, insets.start);
         ctx.indicatorInsets.end = std::max(ctx.indicatorInsets.end, insets.end);
     }
+    ctx.measureIndicators = false;
 
     for (size_t i = 0; i < count; ++i) {
         auto& icon = ctx.icons[i];
@@ -1455,6 +1543,8 @@ static bool RebaseIconGeometryFast(DockAnimationContext& ctx) {
 
 // Builds or refreshes the icon list and sets up transforms for animation (scale + translate).
 void RefreshIconPositions(DockAnimationContext& ctx) {
+    StopLayoutWatch(ctx);
+    ctx.measureIndicators = true;
     ctx.needsFrame = true;
     // Preserve smoothing state across a visual tree refresh.
     std::unordered_map<void*, IconAnimState> prevStates;
@@ -1471,6 +1561,7 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
 
     auto taskbarFrame = ctx.taskbarFrame.get();
     if (!taskbarFrame) return;
+    StartLayoutWatch(ctx, taskbarFrame);
 
     auto IsTaskListButtonExact = [&](FrameworkElement const& e) -> bool {
         if (!e) return false;
@@ -1622,6 +1713,7 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
                                 indicator.original = indicator.visual.TransformMatrix();
                                 indicator.applied = indicator.original;
                                 info.transforms.indicators.push_back(std::move(indicator));
+                                WatchIndicatorVisibility(ctx, child);
                             }
                         } else {
                             self(self, child);
@@ -1867,6 +1959,7 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
             });
 
         ctx.icons = std::move(newIcons);
+        ctx.lastGeometryCheck = std::chrono::steady_clock::now();
 
     } catch (winrt::hresult_error const& e) {
         Wh_Log(L"DockAnimation: HRESULT error during icon search: %s", e.message().c_str());
@@ -1935,7 +2028,14 @@ void OnCompositionTargetRendering() {
             ctx.lastDirtyCheck = now;
         }
 
-        // Dirty-check
+        if (ctx.layoutSignal &&
+            ctx.layoutSignal->indicatorsDirty.exchange(false, std::memory_order_relaxed)) {
+            ctx.measureIndicators = true;
+            ctx.needsFrame = true;
+        }
+
+        // Keep the cheap structure poll; only remeasure stable geometry when
+        // layout changed or the one-second fallback is due.
         if (state.mouseInside) {
             auto sinceCheck = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - ctx.lastDirtyCheck).count();
@@ -1946,6 +2046,10 @@ void OnCompositionTargetRendering() {
                 auto frame = ctx.taskbarFrame.get();
                 if (frame) {
                     UpdateTaskbarEdge(ctx);
+                    if (!ctx.isInitialized) {
+                        RefreshIconPositions(ctx);
+                        ctx.isInitialized = true;
+                    }
 
                     auto host = ctx.iconHost.get();
                     if (!host) {
@@ -1959,7 +2063,16 @@ void OnCompositionTargetRendering() {
                         if (ctx.icons.empty() || SigDifferent(sig, ctx.lastSig)) {
                             RefreshIconPositions(ctx);
                         } else {
-                            if (RebaseIconGeometryFast(ctx)) ctx.needsFrame = true;
+                            const bool dirty = ctx.layoutSignal &&
+                                ctx.layoutSignal->geometryDirty.exchange(false, std::memory_order_relaxed);
+                            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now - ctx.lastGeometryCheck);
+                            if (ShouldRefreshGeometry(ctx.layoutSubscribed, dirty, elapsed)) {
+                                RebaseIconGeometryFast(ctx);
+                                ctx.measureIndicators = true;
+                                ctx.needsFrame = true;
+                                ctx.lastGeometryCheck = now;
+                            }
                         }
 
                         ctx.lastSig = sig;
