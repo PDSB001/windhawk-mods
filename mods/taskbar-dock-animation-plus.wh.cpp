@@ -1139,6 +1139,18 @@ static bool ShouldAnimateElement(FrameworkElement const& e) {
     return true;
 }
 
+// Read the arranged slot through its parent, never through the animated visual.
+// Restoring a Composition matrix and immediately calling TransformToVisual on
+// the same element can still observe its animated geometry. Feeding that back
+// into the constrained wave makes a group between fixed buttons oscillate.
+static winrt::Windows::Foundation::Point GetIconLayoutOrigin(
+    FrameworkElement const& element, FrameworkElement const& frame) {
+    auto parent = VisualTreeHelper::GetParent(element).try_as<FrameworkElement>();
+    if (!parent) throw winrt::hresult_error(E_FAIL);
+    const auto offset = element.ActualOffset();
+    return parent.TransformToVisual(frame).TransformPoint({offset.x, offset.y});
+}
+
 static bool RebaseIconGeometryFast(DockAnimationContext& ctx) {
     auto frame = ctx.taskbarFrame.get();
     if (!frame) return false;
@@ -1160,20 +1172,18 @@ static bool RebaseIconGeometryFast(DockAnimationContext& ctx) {
 
         try {
             auto& transforms = info.transforms;
-            const auto previous = transforms.applied;
-            transforms.Restore();
-            winrt::Windows::Foundation::Point pt;
-            try {
-                pt = e.TransformToVisual(frame).TransformPoint({0, 0});
-            } catch (...) {
-                if (previous != transforms.applied) ctx.needsFrame = true;
-                throw;
+            // Observe another owner's writes without removing our settled pose.
+            const auto current = transforms.visual.TransformMatrix();
+            if (current != transforms.applied) {
+                transforms.original = current;
+                transforms.applied = current;
+                changed = true;
             }
+            const auto pt = GetIconLayoutOrigin(e, frame);
             const double width = ctx.isVertical ? e.ActualHeight() : e.ActualWidth();
             const double center = (ctx.isVertical ? pt.Y : pt.X) +
                                   (g_settings.taskbarLabelsMode ? 0.0 : width / 2.0);
-            changed |= previous != transforms.applied ||
-                       std::abs(center - info.originalCenterX) > 0.001 ||
+            changed |= std::abs(center - info.originalCenterX) > 0.001 ||
                        std::abs(width - info.elementWidth) > 0.001;
             info.elementWidth = width;
             info.originalCenterX = center;
@@ -1343,8 +1353,7 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
             transforms.applied = transforms.original;
             SetIconPivot(transforms, element, ctx.isVertical, ctx.edge);
 
-            auto transform = element.TransformToVisual(taskbarFrame);
-            auto point = transform.TransformPoint({0, 0});
+            const auto point = GetIconLayoutOrigin(element, taskbarFrame);
 
             TaskbarIconInfo info;
             info.element = element;
