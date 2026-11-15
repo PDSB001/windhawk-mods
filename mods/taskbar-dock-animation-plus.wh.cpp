@@ -52,6 +52,11 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Dock-style magnification for the Windows 11 taskbar. Use a flowing wave across neighboring buttons, enlarge only the hovered button, or keep selected applications at their normal size.
 
+![Plus wave animation recorded on Windows 11](https://raw.githubusercontent.com/PDSB001/windhawk-mods/refs/heads/integrate/dock-profiles-composition/assets/taskbar-dock-animation-plus/previews/wave.gif)
+
+Actual Plus footage from the submitter's desktop, cropped to the taskbar. / Plus 实机录制，仅截取任务栏区域。
+
+
 ## What you can configure
 
 - **Per-app animation:** choose Wave, Single icon, or Off for each application, with an optional maximum scale.
@@ -116,11 +121,27 @@ The submitter reports that the Plus 2.1.0 desktop test passed on **Windows 11 Pr
 
 Support Plus: [Website](https://incconutwo.com) · [Ko-fi](https://ko-fi.com/incconutwo) · [GitHub](https://github.com/incconutwo) · [X](https://x.com/tnemoroccan).
 
-## Original animation preview
+## Four taskbar positions / 四边展示
 
-This preview shows the original animation, before the per-app rules and constrained wave layout were added.
+The recording shows bottom, top, left, and right placements on the tested Windows 11 Insider setup. If automatic detection points the animation in the wrong direction, choose the actual edge in **Taskbar position**. A manual choice applies to all taskbars.
 
-![Original Taskbar Dock Animation preview](https://raw.githubusercontent.com/Ph0en1x-dev/Hlam/refs/heads/main/Screen-recording-2025-11-06-155028.gif)
+下图展示本次 Windows 11 Insider 环境下的底部、顶部、左侧和右侧。自动识别方向不对时，请在“任务栏位置”选择实际方向；手动设置对所有任务栏生效。
+
+![Plus on four taskbar edges](https://raw.githubusercontent.com/PDSB001/windhawk-mods/refs/heads/integrate/dock-profiles-composition/assets/taskbar-dock-animation-plus/previews/four-positions.gif)
+
+The four views are separate excerpts combined for comparison; vertical previews are displayed at half size. They do not show four simultaneous taskbars.
+
+四边为同一段录像中不同时间的片段，纵向预览缩小至一半展示。
+
+## Default and small taskbars / 默认与小号任务栏
+
+Both rows retain the source recording's pixel scale so the taskbar sizes can be compared. Animation settings and available space affect the final appearance.
+
+两行保留原录像的像素比例，便于对比任务栏大小；实际效果还取决于动画设置和可用空间。
+
+![Default and small taskbar sizes](https://raw.githubusercontent.com/PDSB001/windhawk-mods/refs/heads/integrate/dock-profiles-composition/assets/taskbar-dock-animation-plus/previews/taskbar-sizes.gif)
+
+Recorded on Windows 11 Pro Insider Preview 26H2, OS build 26340.9882. These previews document this desktop setup; other Windows builds and taskbar-mod combinations require separate validation.
 */
 // ==/WindhawkModReadme==
 
