@@ -560,6 +560,8 @@ struct IndicatorTransforms {
     winrt::Windows::UI::Composition::Visual visual{nullptr};
     float4x4 original = float4x4::identity();
     float4x4 applied = float4x4::identity();
+    float crossOrigin = 0.0f;
+    bool layoutValid = false;
 
     void Restore() {
         const auto current = visual.TransformMatrix();
@@ -581,13 +583,16 @@ static float IndicatorCrossAxisTranslation(float origin, float scale, float shif
 // Keep painted content inside the native cross-axis slot when it fits. This
 // adjusts translation only: the requested scale and wave layout stay intact.
 static float FitIconCrossAxis(float start, float end, float extent,
-                              float scale, float translation) {
+                              float scale, float translation,
+                              float lower = 0.0f, float upper = -1.0f) {
+    if (upper < 0.0f) upper = extent;
+    if (!(lower >= 0.0f && upper <= extent && upper > lower)) return translation;
     if (!(extent > 0.0f && end > start && start >= 0.0f && end <= extent) ||
         !std::isfinite(scale) || !std::isfinite(translation) || scale <= 0.0f) {
         return translation;
     }
-    const float minimum = -start * scale;
-    const float maximum = extent - end * scale;
+    const float minimum = lower - start * scale;
+    const float maximum = upper - end * scale;
     if (minimum > maximum) {
         // Oversized content cannot fit without changing scale or its host.
         // Center the unavoidable overflow instead of clipping one side early.
@@ -616,28 +621,54 @@ struct IconTransforms {
                          static_cast<float>(pose.waveX * pose.bounceScaleX + pose.bounceX);
         float dy = pivotY * (1.0f - sy) +
                          static_cast<float>(pose.waveY * pose.bounceScaleY + pose.bounceY);
-        if (vertical) dx = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sx, dx);
-        else dy = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sy, dy);
+        auto root = button.get();
+        float lower = 0.0f;
+        float upper = crossExtent;
+        for (auto& indicator : indicators) {
+            indicator.layoutValid = false;
+            try {
+                auto element = indicator.element.get();
+                if (!root || !element) continue;
+                auto parent = VisualTreeHelper::GetParent(element).try_as<FrameworkElement>();
+                if (!parent) continue;
+                const auto offset = element.ActualOffset();
+                const auto transform = parent.TransformToVisual(root);
+                const auto origin = transform.TransformPoint({offset.x, offset.y});
+                indicator.crossOrigin = vertical ? origin.X : origin.Y;
+                indicator.layoutValid = true;
+                const auto bounds = transform.TransformBounds({
+                    offset.x, offset.y, static_cast<float>(element.ActualWidth()),
+                    static_cast<float>(element.ActualHeight())});
+                const float start = vertical ? bounds.X : bounds.Y;
+                const float size = vertical ? bounds.Width : bounds.Height;
+                // Reserve visible native strips, not a full-size indicator host.
+                // Without this, a top-anchored glyph can cover the fixed strip.
+                if (element.Visibility() == Visibility::Visible && size > 0.0f &&
+                    size < crossExtent / 2.0f && start >= 0.0f && start + size <= crossExtent) {
+                    constexpr float gap = 1.0f;
+                    if (start >= crossEnd && crossEnd > crossStart) upper = std::min(upper, start - gap);
+                    else if (start + size <= crossStart) lower = std::max(lower, start + size + gap);
+                }
+            } catch (const winrt::hresult_error&) {
+            }
+        }
+        if (vertical) dx = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sx, dx, lower, upper);
+        else dy = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sy, dy, lower, upper);
         const float4x4 effect{sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, 1, 0, dx, dy, 0, 1};
         const auto next = effect * original;
         if (next != applied) {
             visual.TransformMatrix(next);
             applied = next;
         }
-        if (auto root = button.get()) {
+        if (root) {
             for (auto& indicator : indicators) {
                 try {
-                    auto element = indicator.element.get();
-                    if (!element) continue;
-                    auto parent = VisualTreeHelper::GetParent(element).try_as<FrameworkElement>();
-                    if (!parent) continue;
-                    const auto offset = element.ActualOffset();
-                    const auto origin = parent.TransformToVisual(root).TransformPoint({offset.x, offset.y});
+                    if (!indicator.layoutValid) continue;
                     const float scale = vertical ? sx : sy;
                     const float shift = vertical ? dx : dy;
                     if (!(scale > 0.0f)) continue;
                     const float translation = IndicatorCrossAxisTranslation(
-                        vertical ? origin.X : origin.Y, scale, shift);
+                        indicator.crossOrigin, scale, shift);
                     const float inverse = 1.0f / scale;
                     const float4x4 counter = vertical
                         ? float4x4{inverse,0,0,0, 0,1,0,0, 0,0,1,0, translation,0,0,1}
