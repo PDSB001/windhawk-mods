@@ -94,16 +94,11 @@ This mod is a fork of the original [Taskbar Dock Animation](https://windhawk.net
 
 ---
 
-## ![Image](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/image.svg) Preview
-![Taskbar Dock Animation Preview](https://raw.githubusercontent.com/Ph0en1x-dev/Hlam/refs/heads/main/Screen-recording-2025-11-06-155028.gif)
-
----
-
 ## Version 2.1.0 additions / 2.1.0 新增内容
 
-The original Plus description, support information, credits, and preview above are retained. The following sections describe the integrated additions and current test footage. Where the original notes recommend 130%, the new content-fit corrections reduce early clipping, but do not remove the taskbar's physical size limits. Use the compatibility notes below for this version.
+The original Plus description, support information, and credits above are retained. The following sections describe the integrated additions and current test footage. Where the original notes recommend 130%, the new content-fit corrections reduce early clipping, but do not remove the taskbar's physical size limits. Use the compatibility notes below for this version.
 
-以上保留 Plus 原有介绍、支持方式、致谢和演示。以下补充本次整合的新功能与实录。原说明建议从 130% 开始；新的边界校正改善提前裁切，但任务栏仍有物理尺寸限制，请结合下方本版本兼容性说明使用。
+以上保留 Plus 原有介绍、支持方式和致谢。以下补充本次整合的新功能与实录。原说明建议从 130% 开始；新的边界校正改善提前裁切，但任务栏仍有物理尺寸限制，请结合下方本版本兼容性说明使用。
 
 Dock-style magnification for the Windows 11 taskbar. Use a flowing wave across neighboring buttons, enlarge only the hovered button, or keep selected applications at their normal size.
 
