@@ -497,20 +497,44 @@ struct IconPose {
 
 using winrt::Windows::Foundation::Numerics::float4x4;
 
+// Keep painted content inside the native cross-axis slot when it fits. This
+// adjusts translation only: the requested scale and wave layout stay intact.
+static float FitIconCrossAxis(float start, float end, float extent,
+                              float scale, float translation) {
+    if (!(extent > 0.0f && end > start && start >= 0.0f && end <= extent) ||
+        !std::isfinite(scale) || !std::isfinite(translation) || scale <= 0.0f) {
+        return translation;
+    }
+    const float minimum = -start * scale;
+    const float maximum = extent - end * scale;
+    if (minimum > maximum) {
+        // Oversized content cannot fit without changing scale or its host.
+        // Center the unavoidable overflow instead of clipping one side early.
+        return (minimum + maximum) / 2.0f;
+    }
+    return std::clamp(translation, minimum, maximum);
+}
+
 struct IconTransforms {
     winrt::Windows::UI::Composition::Visual visual{nullptr};
     float4x4 original = float4x4::identity();
     float4x4 applied = float4x4::identity();
     float pivotX = 0.0f;
     float pivotY = 0.0f;
+    bool vertical = false;
+    float crossStart = 0.0f;
+    float crossEnd = 0.0f;
+    float crossExtent = 0.0f;
 
     void Apply(const IconPose& pose) {
         const float sx = static_cast<float>(pose.waveScale * pose.bounceScaleX);
         const float sy = static_cast<float>(pose.waveScale * pose.bounceScaleY);
-        const float dx = pivotX * (1.0f - sx) +
+        float dx = pivotX * (1.0f - sx) +
                          static_cast<float>(pose.waveX * pose.bounceScaleX + pose.bounceX);
-        const float dy = pivotY * (1.0f - sy) +
+        float dy = pivotY * (1.0f - sy) +
                          static_cast<float>(pose.waveY * pose.bounceScaleY + pose.bounceY);
+        if (vertical) dx = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sx, dx);
+        else dy = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sy, dy);
         const float4x4 effect{sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, 1, 0, dx, dy, 0, 1};
         const auto next = effect * original;
         if (next != applied) {
@@ -535,6 +559,8 @@ void SetIconPivot(IconTransforms& transforms, FrameworkElement const& element,
                   bool vertical, TaskbarEdge edge) {
     const float width = static_cast<float>(element.ActualWidth());
     const float height = static_cast<float>(element.ActualHeight());
+    transforms.vertical = vertical;
+    transforms.crossExtent = vertical ? width : height;
     transforms.pivotX = vertical ? (edge == TaskbarEdge::Left ? 0.0f : width)
         : (g_settings.taskbarLabelsMode && width > 0.0f ? 24.0f : width / 2.0f);
     transforms.pivotY = vertical
@@ -1408,6 +1434,15 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
                                 largestArea = area;
                                 info.footprintStart = start / info.elementWidth;
                                 info.footprintEnd = (start + width) / info.elementWidth;
+                                const float crossStart = ctx.isVertical ? bounds.X : bounds.Y;
+                                const float crossSize = ctx.isVertical ? bounds.Width : bounds.Height;
+                                if (crossStart >= 0.0f && crossSize > 0.0f &&
+                                    crossStart + crossSize <= info.transforms.crossExtent) {
+                                    info.transforms.crossStart = crossStart;
+                                    info.transforms.crossEnd = crossStart + crossSize;
+                                } else {
+                                    info.transforms.crossStart = info.transforms.crossEnd = 0.0f;
+                                }
                             }
                         }
                         self(self, child);
