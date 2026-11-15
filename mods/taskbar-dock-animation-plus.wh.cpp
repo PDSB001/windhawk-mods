@@ -50,6 +50,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 /*
 # Taskbar Dock Animation Plus
 
+**Co-authors / 共同作者：[incconutwo](https://github.com/incconutwo) · [PDSB001](https://github.com/PDSB001)**
+
 Bring macOS-style Dock magnification to the Windows 11 taskbar. Plus builds on the original Taskbar Dock Animation, with four-edge placement handling, multi-monitor improvements, smooth breathing transitions, and per-app control over how each button animates.
 
 为 Windows 11 任务栏添加 macOS Dock 风格放大动画，支持四边布局、多显示器、平滑呼吸效果，以及按应用设置动画模式和倍率。
@@ -125,16 +127,21 @@ Desktop testing and the previews use **Windows 11 Pro Insider Preview 26H2, OS b
 
 本机实测环境为上述系统版本，已确认按应用模式、规则优先级、小组件控制、仅应用过滤及 160% 图标和横条修正。严格 x64 编译与自动布局、坐标和横条检查通过；不同系统版本和模组组合需分别验证。
 
-## ![Globe](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/globe.svg) Author and support / 作者与支持
+## ![Globe](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/globe.svg) Authors and support / 作者与支持
 
-Support incconutwo's continued work on Plus:
+| Co-author / 共同作者 | Profile / 主页 |
+| --- | --- |
+| incconutwo | [github.com/incconutwo](https://github.com/incconutwo) |
+| PDSB001 | [github.com/PDSB001](https://github.com/PDSB001) |
+
+### incconutwo's links / incconutwo 的链接
 
 - **Personal Website & Projects:** [incconutwo.com](https://incconutwo.com)
 - **Support My Work:** [Ko-fi](https://ko-fi.com/incconutwo)
 - **GitHub Profile:** [github.com/incconutwo](https://github.com/incconutwo)
 - **X (Twitter):** [@tnemoroccan](https://x.com/tnemoroccan)
 
-For device-specific issues, including Dell / Alienware setups, open an issue or contact the maintainer. Animation ideas and curve suggestions are welcome in the mod topic or by direct message.
+For device-specific issues, including Dell / Alienware setups, open an issue or contact the authors. Animation ideas and curve suggestions are welcome in the mod topic or by direct message.
 
 如遇设备相关问题（包括 Dell / Alienware），可提交问题或联系维护者。也欢迎在模组讨论中提出动画和曲线建议。
 
