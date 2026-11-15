@@ -574,6 +574,18 @@ struct IndicatorTransforms {
     }
 };
 
+struct CrossAxisInsets {
+    float start = 0.0f;
+    float end = 0.0f;
+};
+
+static void MergeIndicatorInsets(CrossAxisInsets& shared, float extent,
+                                  float lower, float upper) {
+    if (!(extent > 0.0f && lower >= 0.0f && upper <= extent && upper > lower)) return;
+    shared.start = std::max(shared.start, lower / extent);
+    shared.end = std::max(shared.end, (extent - upper) / extent);
+}
+
 // Cancel the parent's cross-axis effect around the indicator's native origin.
 // Along the wave axis, the indicator continues to follow its button.
 static float IndicatorCrossAxisTranslation(float origin, float scale, float shift) {
@@ -614,13 +626,7 @@ struct IconTransforms {
     winrt::weak_ref<FrameworkElement> button;
     std::vector<IndicatorTransforms> indicators;
 
-    void Apply(const IconPose& pose) {
-        const float sx = static_cast<float>(pose.waveScale * pose.bounceScaleX);
-        const float sy = static_cast<float>(pose.waveScale * pose.bounceScaleY);
-        float dx = pivotX * (1.0f - sx) +
-                         static_cast<float>(pose.waveX * pose.bounceScaleX + pose.bounceX);
-        float dy = pivotY * (1.0f - sy) +
-                         static_cast<float>(pose.waveY * pose.bounceScaleY + pose.bounceY);
+    CrossAxisInsets MeasureIndicatorInsets() {
         auto root = button.get();
         float lower = 0.0f;
         float upper = crossExtent;
@@ -652,6 +658,21 @@ struct IconTransforms {
             } catch (const winrt::hresult_error&) {
             }
         }
+        CrossAxisInsets result;
+        MergeIndicatorInsets(result, crossExtent, lower, upper);
+        return result;
+    }
+
+    void Apply(const IconPose& pose, const CrossAxisInsets& sharedInsets) {
+        const float sx = static_cast<float>(pose.waveScale * pose.bounceScaleX);
+        const float sy = static_cast<float>(pose.waveScale * pose.bounceScaleY);
+        float dx = pivotX * (1.0f - sx) +
+                         static_cast<float>(pose.waveX * pose.bounceScaleX + pose.bounceX);
+        float dy = pivotY * (1.0f - sy) +
+                         static_cast<float>(pose.waveY * pose.bounceScaleY + pose.bounceY);
+        auto root = button.get();
+        const float lower = sharedInsets.start * crossExtent;
+        const float upper = (1.0f - sharedInsets.end) * crossExtent;
         if (vertical) dx = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sx, dx, lower, upper);
         else dy = FitIconCrossAxis(crossStart, crossEnd, crossExtent, sy, dy, lower, upper);
         const float4x4 effect{sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, 1, 0, dx, dy, 0, 1};
@@ -738,6 +759,7 @@ struct DockAnimationContext {
     winrt::weak_ref<FrameworkElement> iconHost;
     std::vector<TaskbarIconInfo> icons;
     std::vector<DockWaveItem> waveScratch;
+    CrossAxisInsets indicatorInsets;
     bool needsFrame = true;
     double lastLayoutMouse = -1.0;
 
@@ -791,6 +813,7 @@ void ResetContext(DockAnimationContext& ctx) {
     ctx.isInitialized = false;
     ctx.needsFrame = true;
     ctx.icons.clear();
+    ctx.indicatorInsets = {};
 }
 
 HMODULE GetTaskbarViewModuleHandle();
@@ -1117,6 +1140,15 @@ bool ApplyAnimation(double mouseX, DockAnimationContext& ctx, double intensity,
         }
     }
 
+    // Every animated button uses the same reserved band, including apps with
+    // no running strip. Retain it for this context so state changes do not
+    // make the glyphs jump between different cross-axis alignments.
+    for (auto& icon : ctx.icons) {
+        const auto insets = icon.transforms.MeasureIndicatorInsets();
+        ctx.indicatorInsets.start = std::max(ctx.indicatorInsets.start, insets.start);
+        ctx.indicatorInsets.end = std::max(ctx.indicatorInsets.end, insets.end);
+    }
+
     for (size_t i = 0; i < count; ++i) {
         auto& icon = ctx.icons[i];
         IconPose pose;
@@ -1135,7 +1167,7 @@ bool ApplyAnimation(double mouseX, DockAnimationContext& ctx, double intensity,
                 else pose.bounceY = bounceTranslateOffset;
             }
         }
-        icon.transforms.Apply(pose);
+        icon.transforms.Apply(pose, ctx.indicatorInsets);
     }
     return settling;
 }
