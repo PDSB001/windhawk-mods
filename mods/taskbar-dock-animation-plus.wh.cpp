@@ -774,6 +774,20 @@ void SetIconPivot(IconTransforms& transforms, FrameworkElement const& element,
                                             : (edge == TaskbarEdge::Top ? 0.0f : height));
 }
 
+// Wide system controls paint a background beyond their glyph/text bounds.
+// Reserve their whole slot instead of treating that background as empty space.
+static bool UseFullSlotFootprint(bool isApplication, double extent, double crossExtent) {
+    return !isApplication && crossExtent > 0.0 && extent > crossExtent * 1.5;
+}
+
+static double FixedSlotScaleLimit(double start, double width, double pivot,
+                                  double lower, double upper) {
+    double limit = std::numeric_limits<double>::infinity();
+    if (pivot > 0.0 && std::isfinite(lower)) limit = std::min(limit, 1.0 + (start - lower) / pivot);
+    if (width > pivot && std::isfinite(upper)) limit = std::min(limit, (upper - start - pivot) / (width - pivot));
+    return std::max(1.0, limit);
+}
+
 // Per-monitor context
 struct TaskbarIconInfo {
     winrt::weak_ref<FrameworkElement> element;
@@ -781,6 +795,7 @@ struct TaskbarIconInfo {
     double elementWidth = 0.0;
     double footprintStart = 0.0;
     double footprintEnd = 1.0;
+    bool fullSlotFootprint = false;
     IconAnimState state;
     IconTransforms transforms;
     AppAnimationRule rule;
@@ -1187,7 +1202,16 @@ bool ApplyAnimation(double mouseX, DockAnimationContext& ctx, double intensity,
                     closestIconIndex = i;
                     minDistance = 0.0;
                 }
-                const double scale = requestedScale(icon, hovered ? maxScaleOf(icon) : 1.0);
+                double limit = std::numeric_limits<double>::infinity();
+                if (icon.fullSlotFootprint) {
+                    const double lower = i > 0
+                        ? startOf(ctx.icons[i - 1]) + ctx.icons[i - 1].elementWidth : -unbounded;
+                    const double upper = i + 1 < count ? startOf(ctx.icons[i + 1]) : unbounded;
+                    const double pivot = ctx.isVertical ? icon.transforms.pivotY : icon.transforms.pivotX;
+                    limit = FixedSlotScaleLimit(start, icon.elementWidth, pivot, lower, upper);
+                }
+                const double target = hovered ? std::min(maxScaleOf(icon), limit) : 1.0;
+                const double scale = std::min(limit, requestedScale(icon, target));
                 icon.state = {scale, 0.0, scale};
             }
             ++i;
@@ -1204,7 +1228,7 @@ bool ApplyAnimation(double mouseX, DockAnimationContext& ctx, double intensity,
         for (size_t j = first; j < i; ++j) {
             const auto& button = ctx.icons[j];
             const double start = startOf(button);
-            const double distance = g_settings.taskbarLabelsMode
+            const double distance = (g_settings.taskbarLabelsMode || button.fullSlotFootprint)
                 ? std::max({0.0, start - mouseX, mouseX - start - button.elementWidth})
                 : std::abs(mouseX - button.originalCenterX);
             const double scale = active ? CalculateScale(distance, g_settings.effectRadius,
@@ -1277,9 +1301,9 @@ bool ApplyAnimation(double mouseX, DockAnimationContext& ctx, double intensity,
 
         if (i == closestIconIndex && currentBounceIntensity > 0.0) {
             // Wave layout owns the main axis. Bounce can grow across the taskbar.
-            const bool wave = modeOf(icon) == AppAnimationMode::Wave;
-            if (!wave || ctx.isVertical) pose.bounceScaleX = bounceScaleFactor;
-            if (!wave || !ctx.isVertical) pose.bounceScaleY = bounceScaleFactor;
+            const bool constrainedMainAxis = modeOf(icon) == AppAnimationMode::Wave || icon.fullSlotFootprint;
+            if (!constrainedMainAxis || ctx.isVertical) pose.bounceScaleX = bounceScaleFactor;
+            if (!constrainedMainAxis || !ctx.isVertical) pose.bounceScaleY = bounceScaleFactor;
 
             if (!g_settings.disableBounce && !g_settings.disableVerticalBounce) {
                 if (ctx.isVertical) pose.bounceX = bounceTranslateOffset;
@@ -1757,6 +1781,8 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
 
             if (info.elementWidth > 0.0) {
                 const bool isAppButton = IsTaskListButtonExact(element);
+                info.fullSlotFootprint = UseFullSlotFootprint(
+                    isAppButton, info.elementWidth, info.transforms.crossExtent);
                 std::optional<winrt::Windows::Foundation::Rect> content;
                 const auto findFootprint = [&](auto const& self, FrameworkElement const& parent) -> void {
                     EnumChildElements(parent, [&](FrameworkElement child) {
@@ -1802,7 +1828,7 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
                     const float start = ctx.isVertical ? content->Y : content->X;
                     const float width = ctx.isVertical ? content->Height : content->Width;
                     // Application labels retain the full native slot for layout.
-                    if (!g_settings.taskbarLabelsMode || !isAppButton) {
+                    if (!info.fullSlotFootprint && (!g_settings.taskbarLabelsMode || !isAppButton)) {
                         info.footprintStart = start / info.elementWidth;
                         info.footprintEnd = (start + width) / info.elementWidth;
                     }
