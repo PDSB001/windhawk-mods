@@ -1130,12 +1130,18 @@ static HostSignature ComputeHostSignature(FrameworkElement const& host, bool isV
     sig.width = isVertical ? host.ActualHeight() : host.ActualWidth();
 
     uint64_t h = 1469598103934665603ULL;
+    // Cross-axis changes alter clipping limits and the icon/indicator pivots,
+    // even when the number, order, and main-axis size of buttons stay the same.
+    const double crossSize = isVertical ? host.ActualWidth() : host.ActualHeight();
+    h = Fnv1aMix(h, (uint64_t)(crossSize * 10.0));
     for (int i = 0; i < sig.count; i++) {
         auto child = VisualTreeHelper::GetChild(host, i).try_as<FrameworkElement>();
         if (!child) continue;
         h = Fnv1aMix(h, (uint64_t)winrt::get_abi(child));
         double size = isVertical ? child.ActualHeight() : child.ActualWidth();
         h = Fnv1aMix(h, (uint64_t)(size * 10.0));
+        const double crossSize = isVertical ? child.ActualWidth() : child.ActualHeight();
+        h = Fnv1aMix(h, (uint64_t)(crossSize * 10.0));
     }
     sig.orderHash = h;
     return sig;
@@ -1494,8 +1500,7 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
             }
             info.elementWidth = ctx.isVertical ? element.ActualHeight() : element.ActualWidth();
 
-            if (!g_settings.taskbarLabelsMode && info.elementWidth > 0.0 &&
-                IsTaskListButtonExact(element)) {
+            if (info.elementWidth > 0.0 && IsTaskListButtonExact(element)) {
                 double largestArea = 0.0;
                 const auto findFootprint = [&](auto const& self, FrameworkElement const& parent) -> void {
                     EnumChildElements(parent, [&](FrameworkElement child) {
@@ -1510,8 +1515,12 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
                             if (area > largestArea && width >= 12.0 &&
                                 start >= 0.0 && start + width <= info.elementWidth) {
                                 largestArea = area;
-                                info.footprintStart = start / info.elementWidth;
-                                info.footprintEnd = (start + width) / info.elementWidth;
+                                // Labels retain their full button width for wave layout,
+                                // but still need the painted glyph's cross-axis bounds.
+                                if (!g_settings.taskbarLabelsMode) {
+                                    info.footprintStart = start / info.elementWidth;
+                                    info.footprintEnd = (start + width) / info.elementWidth;
+                                }
                                 const float crossStart = ctx.isVertical ? bounds.X : bounds.Y;
                                 const float crossSize = ctx.isVertical ? bounds.Width : bounds.Height;
                                 if (crossStart >= 0.0f && crossSize > 0.0f &&
