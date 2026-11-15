@@ -497,6 +497,29 @@ struct IconPose {
 
 using winrt::Windows::Foundation::Numerics::float4x4;
 
+struct IndicatorTransforms {
+    winrt::weak_ref<FrameworkElement> element;
+    winrt::Windows::UI::Composition::Visual visual{nullptr};
+    float4x4 original = float4x4::identity();
+    float4x4 applied = float4x4::identity();
+
+    void Restore() {
+        const auto current = visual.TransformMatrix();
+        if (current == applied) {
+            if (current != original) visual.TransformMatrix(original);
+        } else {
+            original = current;
+        }
+        applied = original;
+    }
+};
+
+// Cancel the parent's cross-axis effect around the indicator's native origin.
+// Along the wave axis, the indicator continues to follow its button.
+static float IndicatorCrossAxisTranslation(float origin, float scale, float shift) {
+    return (origin - shift) / scale - origin;
+}
+
 // Keep painted content inside the native cross-axis slot when it fits. This
 // adjusts translation only: the requested scale and wave layout stay intact.
 static float FitIconCrossAxis(float start, float end, float extent,
@@ -525,6 +548,8 @@ struct IconTransforms {
     float crossStart = 0.0f;
     float crossEnd = 0.0f;
     float crossExtent = 0.0f;
+    winrt::weak_ref<FrameworkElement> button;
+    std::vector<IndicatorTransforms> indicators;
 
     void Apply(const IconPose& pose) {
         const float sx = static_cast<float>(pose.waveScale * pose.bounceScaleX);
@@ -541,9 +566,40 @@ struct IconTransforms {
             visual.TransformMatrix(next);
             applied = next;
         }
+        if (auto root = button.get()) {
+            for (auto& indicator : indicators) {
+                try {
+                    auto element = indicator.element.get();
+                    if (!element) continue;
+                    auto parent = VisualTreeHelper::GetParent(element).try_as<FrameworkElement>();
+                    if (!parent) continue;
+                    const auto offset = element.ActualOffset();
+                    const auto origin = parent.TransformToVisual(root).TransformPoint({offset.x, offset.y});
+                    const float scale = vertical ? sx : sy;
+                    const float shift = vertical ? dx : dy;
+                    if (!(scale > 0.0f)) continue;
+                    const float translation = IndicatorCrossAxisTranslation(
+                        vertical ? origin.X : origin.Y, scale, shift);
+                    const float inverse = 1.0f / scale;
+                    const float4x4 counter = vertical
+                        ? float4x4{inverse,0,0,0, 0,1,0,0, 0,0,1,0, translation,0,0,1}
+                        : float4x4{1,0,0,0, 0,inverse,0,0, 0,0,1,0, 0,translation,0,1};
+                    const auto current = indicator.visual.TransformMatrix();
+                    if (current != indicator.applied) indicator.original = current;
+                    const auto matrix = indicator.original * counter;
+                    if (matrix != current) indicator.visual.TransformMatrix(matrix);
+                    indicator.applied = matrix;
+                } catch (const winrt::hresult_error&) {
+                    // Indicators can be replaced while a task changes state.
+                }
+            }
+        }
     }
 
     void Restore() {
+        for (auto& indicator : indicators) {
+            try { indicator.Restore(); } catch (const winrt::hresult_error&) {}
+        }
         const auto current = visual.TransformMatrix();
         if (current == applied) {
             if (current != original) visual.TransformMatrix(original);
@@ -1384,6 +1440,28 @@ void RefreshIconPositions(DockAnimationContext& ctx) {
             TaskbarIconInfo info;
             info.element = element;
             info.transforms = std::move(transforms);
+            if (IsTaskListButtonExact(element)) {
+                info.transforms.button = element;
+                const auto collectIndicators = [&](auto const& self, FrameworkElement const& parent) -> void {
+                    EnumChildElements(parent, [&](FrameworkElement child) {
+                        const auto name = child.Name();
+                        if (name == L"RunningIndicator" || name == L"ProgressIndicator") {
+                            IndicatorTransforms indicator;
+                            indicator.element = child;
+                            indicator.visual = Hosting::ElementCompositionPreview::GetElementVisual(child);
+                            if (indicator.visual) {
+                                indicator.original = indicator.visual.TransformMatrix();
+                                indicator.applied = indicator.original;
+                                info.transforms.indicators.push_back(std::move(indicator));
+                            }
+                        } else {
+                            self(self, child);
+                        }
+                        return false;
+                    });
+                };
+                collectIndicators(collectIndicators, element);
+            }
             if (rules && !rules->empty() && IsTaskListButtonExact(element)) {
                 auto matchId = [&](FrameworkElement const& node) {
                     auto rawId = W(AutomationProperties::GetAutomationId(node));
