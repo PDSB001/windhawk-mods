@@ -6,13 +6,13 @@
 // @name:ko-KR        작업 표시줄 Dock 애니메이션 Plus
 // @name:pt-BR        Animação Dock da Barra de Tarefas Plus
 // @name:it-IT        Animazione Dock della Barra delle applicazioni Plus
-// @description       Animates taskbar icons on mouse hover like in macOS (updated fork with support for all taskbar positions and multi-monitor fixes)
-// @description:uk-UA Анімація іконок панелі завдань, як в macOS, при наведенні (версія з підтримкою всіх положень панелі та виправленнями для кількох моніторів)
-// @description:zh-CN 类似 macOS 的任务栏图标悬停动画（支持所有任务栏位置和多显示器修复的更新版）
-// @description:ja-JP macOS のようにマウスホバーでタスクバーアイコンをアニメーション表示します（すべてのタスクバー位置への対応とマルチモニター修正を加えた更新版）
-// @description:ko-KR macOS처럼 마우스를 올리면 작업 표시줄 아이콘이 애니메이션됩니다 (모든 작업 표시줄 위치 지원 및 멀티 모니터 버그가 수정된 업데이트 버전)
-// @description:pt-BR Anima os ícones da barra de tarefas ao passar o mouse, como no macOS (versão atualizada com suporte para todas as posições da barra e correções para múltiplos monitores)
-// @description:it-IT Anima le icone della barra delle applicazioni al passaggio del mouse, come su macOS (versione aggiornata con supporto per tutte le posizioni della barra e correzioni multi-monitor)
+// @description         Dock-style taskbar magnification with per-app animation modes, scale limits, and independent Widgets control
+// @description:uk-UA   Збільшення значків панелі завдань у стилі Dock з режимами та масштабом для кожної програми й окремим керуванням віджетами
+// @description:zh-CN   Dock 风格任务栏放大动画，支持按应用选择动画模式、设置放大倍率及单独控制小组件
+// @description:ja-JP   Dock 風のタスクバー拡大アニメーション。アプリごとのモードと拡大率、ウィジェットを個別に設定できます
+// @description:ko-KR   Dock 스타일 작업 표시줄 확대 애니메이션. 앱별 모드와 확대 비율, 위젯 애니메이션을 개별 설정합니다
+// @description:pt-BR   Ampliação da barra de tarefas no estilo Dock, com modos e limites de escala por aplicativo e controle separado de Widgets
+// @description:it-IT   Ingrandimento della barra delle applicazioni in stile Dock, con modalità e limiti per app e controllo separato dei widget
 // @version           2.1.0
 // @author            incconutwo, PDSB001
 // @github            https://github.com/incconutwo
@@ -50,80 +50,73 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 /*
 # Taskbar Dock Animation Plus
 
-Magnifies Windows 11 taskbar buttons on hover, with a Dock wave or single-icon zoom. Per-app rules control which buttons join the wave, zoom independently, or stay fixed. Input method, volume, and other system tray icons stay at their normal size.
+Dock-style magnification for the Windows 11 taskbar. Use a flowing wave across neighboring buttons, enlarge only the hovered button, or keep selected applications at their normal size.
 
-This is an updated fork of the original Taskbar Dock Animation mod, adding compatibility for all taskbar positions and key stability improvements.
+## What you can configure
 
-**Requires Windows 11 or newer to function.**
+- **Per-app animation:** choose Wave, Single icon, or Off for each application, with an optional maximum scale.
+- **Wave boundaries:** Single and Off buttons stay in their original slots and divide the wave into groups. Each group fits within its available space, prioritizing buttons near the pointer when space is tight.
+- **Widgets and system buttons:** control Widgets independently, exclude Start, or animate app buttons only. Input method, volume, and other system tray icons are always excluded.
+- **Animation feel:** adjust the curve, radius, spacing, transition duration, smoothing, and idle breathing effect. Label compatibility is available for taskbars that show window titles.
+- **Existing Plus features:** retains taskbar placement handling, multi-monitor adaptations, and live settings updates. Placement changes made by other mods still need testing with the specific combination.
 
----
+Scale and translation use Windows Composition, with unchanged visual writes skipped. The existing frame callback is retained.
 
-### ![Sparkles](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/sparkles.svg) Key Additions in this Fork
-* **Support for all Taskbar Placements**: Works seamlessly on Bottom, Top, Left, and Right taskbar positions.
-* **Multi-Monitor Stability**: Fixes crashes and compatibility issues when using multiple screens or monitors.
-* **Smoother Animations**: The idle "breathing" / bounce animation now fades in and out smoothly instead of snapping abruptly.
-* **Instant Settings & Position Updates**: Updates settings and positions in real time as you configure them or move the taskbar, with no restarts required.
-* **Per-app rules** select Wave, Single icon, or Off and an optional maximum scale for each application.
-* **Fixed-button boundaries** keep each wave group within the space between neighboring Single and Off buttons.
-* **Widgets control** lets you disable Widgets animation independently of app animations.
+## Quick setup
 
----
+Start with a maximum scale of **130%**, then tune the radius and spacing for your taskbar. Enable **Enlarge only the hovered icon** for a global single-icon effect, or leave it off for the wave. Per-app rules override that global mode.
 
-### ![Triangle Alert](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/triangle-alert.svg) Known Issues & Limitations
-* Icons are sometimes clipped by the taskbar.
-* Windows Composition changes the drawn position. Native clicks, hover highlights, and previews use the taskbar's original button slots, so they can differ near a shifted icon's edge.
-* Upscaled icons may appear slightly blurry.
+Run `Get-StartApps` in PowerShell to find an application's AppUserModelID. Copy the complete ID into a rule, select a mode, and save. Rules match the application ID rather than window titles or executable names. Applications with custom shortcuts or separate profiles can expose different IDs.
 
-"Taskbar height and icon size" Users: If you are using this mod to create a minimalistic taskbar, please keep the Max Scale at or below 130% to avoid clipping issues. This recommendation applies to other scaling mods as well.
-Dell / Alienware Users: If you encounter specific issues on these devices, please reach out to me directly or open an issue so we can investigate together.
-StartAllBack Compatibility: This mod does not and will not support StartAllBack. Supporting it would require a complete rewrite of the codebase, which is currently out of scope.
-Feedback: Feel free to suggest new animation ideas or curves in the mod topic or via direct message!
+| Rule | Result |
+| --- | --- |
+| Wave | Joins the wave within its group |
+| Single icon | Enlarges when hovered, without shifting neighboring buttons |
+| Off | Keeps its normal size and position |
+| Maximum scale = 0 | Inherits the global maximum |
+| Maximum scale = 101–220 | Uses that application's maximum percentage |
 
-You can experiment with the **radius** value to achieve the best result for your setup until proper fixes for the issues above are found.
+The maximum is a cap, not a guaranteed size: available space can limit wave magnification. Up to 256 rules are read. For duplicate IDs, the last rule wins. An empty ID is ignored. Applications without a matching rule use the global mode and scale.
 
----
+## 中文说明
 
-### ![Globe](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/globe.svg) Author & Support
+为 Windows 11 任务栏添加 Dock 风格放大动画。可以让相邻图标形成波浪，也可以只放大悬停图标，或让指定应用保持原大小。
 
-If you enjoy this mod and want to support its continued development:
-* **Personal Website & Projects:** [incconutwo.com](https://incconutwo.com)
-* **Support My Work:** [Ko-fi](https://ko-fi.com/incconutwo)
-* **GitHub Profile:** [github.com/incconutwo](https://github.com/incconutwo)
-* **X (Twitter):** [@tnemoroccan](https://x.com/tnemoroccan)
+- **按应用配置**：每个应用可选“波浪”“仅放大悬停图标”“关闭动画”，并设置独立的最大倍率。
+- **波浪分区**：单图标和关闭动画的按钮保持原始位置，把波浪分成独立区段。空间不足时优先保留鼠标附近的放大效果。
+- **小组件与系统按钮**：小组件动画可单独关闭，也可排除开始按钮或只让应用按钮参与动画。输入法、音量等系统托盘图标始终不参与放大。
+- **动画调节**：支持曲线、半径、间距、过渡时长、平滑度和呼吸效果；显示窗口标题时可启用标签兼容模式。
 
----
+建议先用 **130%** 最大倍率。全局“仅放大悬停图标”决定未匹配应用的模式，应用规则优先于全局模式。在 PowerShell 运行 `Get-StartApps`，把完整 AppUserModelID 填入规则。规则不按窗口标题或程序文件名匹配，自定义快捷方式或独立配置文件可能使用不同的 ID。
 
-### ![Heart](https://raw.githubusercontent.com/incconutwo/windhawk-mods/main/assets/heart.svg) Credits
+每应用倍率 **0** 表示继承全局值，**101–220** 表示该应用的最大百分比。倍率是上限，波浪模式还受可用空间限制。最多读取 256 条规则，相同 ID 以最后一条为准，空 ID 忽略。没有匹配规则的应用使用全局设置。
 
-[Ph0en1x-dev](https://github.com/Ph0en1x-dev) created the original [Taskbar Dock Animation](https://windhawk.net/mods/taskbar-dock-animation). [incconutwo](https://github.com/incconutwo) maintains Plus and contributed the four-edge and multi-monitor adaptations. [PDSB001](https://github.com/PDSB001) contributed per-app rules, the constrained wave layout, system tray filtering, Composition rendering, and lifecycle fixes. The source preserves all three credits under MIT.
+## Compatibility and known limitations / 兼容性与已知限制
 
----
+- Requires the Windows 11 XAML taskbar. StartAllBack is unsupported.
+- Enlarged icons can be clipped or appear blurry. With taskbar height/icon-size mods, start at 130% or lower and check your layout.
+- Composition changes the drawn position. Native clicks, hover highlights, and previews still use original button slots, so they can differ near a shifted icon's edge.
+- Top, left, and right placements provided by other mods need validation with the specific combination. The current test evidence does not cover every placement.
 
-### Per-app animation rules
+需要 Windows 11 的 XAML 任务栏，不支持 StartAllBack。放大后可能裁切或模糊；配合任务栏高度和图标尺寸模组时，建议从 130% 或更低开始。绘制位置与原生点击、悬停高亮及预览区域可能在移位图标边缘出现偏差。其他模组提供的顶部或竖向任务栏需要分别验证。
 
-Choose Wave, Single icon, or Off for an exact AppUserModelID, with an optional maximum-scale override. Find application IDs with Get-StartApps. Off and Single buttons divide the wave into groups. Each group shares the space available between its fixed neighbors, with buttons near the pointer receiving priority when space is tight.
+## Version 2.1.0 testing / 测试记录
 
-System tray icons are excluded. Widgets animation can be disabled independently. The renderer applies scale and translation through Windows Composition and skips unchanged matrices.
+The submitter reports that the Plus 2.1.0 desktop test passed on **Windows 11 Pro Insider Preview 26H2, OS build 26340.9882**. A desktop recording and system screenshot are included in the integration PR. Strict x64 compilation and 10,000 generated layout checks also passed. Per-app configurations and other taskbar placements should be checked separately on the target setup.
 
-Use Single icon to zoom a hovered button without moving its neighbors, or Off to keep the button at its native size. A per-app maximum scale of 0 inherits the global value. Set 101–220 to override it. Up to 256 rules are read, and the last matching rule wins.
+提交者已确认 Plus 2.1.0 在上述系统版本的桌面测试通过，整合 PR 附有录像和系统截图。严格 x64 编译及 10,000 组布局检查通过。各类按应用配置和其他任务栏位置仍应按实际使用环境单独检查。
 
-### 按应用配置动画
+## Credits and support
 
-在设置中添加完整 AppUserModelID，再选择“波浪”“仅放大悬停图标”或“关闭动画”。可在 PowerShell 中运行 Get-StartApps 查找应用 ID。规则按应用 ID 匹配，窗口标题不参与匹配。
+[Ph0en1x-dev](https://github.com/Ph0en1x-dev) created the original [Taskbar Dock Animation](https://windhawk.net/mods/taskbar-dock-animation). [incconutwo](https://github.com/incconutwo) maintains Plus and contributed taskbar placement and multi-monitor adaptations. [PDSB001](https://github.com/PDSB001) contributed per-app rules, constrained wave layout, system tray filtering, Composition rendering, and lifecycle fixes. All three credits are preserved under MIT.
 
-单图标模式会放大悬停按钮，关闭模式让按钮保持原大小。这两类按钮将波浪分成独立区段。空间不足时，区段会收紧间隙并优先保留鼠标附近的放大效果。每应用倍率为 0 时继承全局设置，101–220 表示自定义，最多读取 256 条规则，相同 ID 以最后一条为准。
+Support Plus: [Website](https://incconutwo.com) · [Ko-fi](https://ko-fi.com/incconutwo) · [GitHub](https://github.com/incconutwo) · [X](https://x.com/tnemoroccan).
 
-输入法、音量等系统托盘图标保持原大小。“关闭小组件动画”可单独控制小组件。Composition 会改变绘制位置，原生点击和预览仍按按钮原始区域判断，移位图标边缘的两者可能有偏差。
+## Original animation preview
 
-### Version 2.1.0 validation
+This preview shows the original animation, before the per-app rules and constrained wave layout were added.
 
-The implementation brought over from Enhance passed local x64 compilation, layout checks, and desktop testing. The Plus integration is undergoing a separate desktop retest for settings compatibility and lifecycle behavior.
-
-### Preview
-
-The recording below shows the original animation. The new per-app modes and constrained wave layout are described above.
-
-![Taskbar Dock Animation Preview](https://raw.githubusercontent.com/Ph0en1x-dev/Hlam/refs/heads/main/Screen-recording-2025-11-06-155028.gif)
+![Original Taskbar Dock Animation preview](https://raw.githubusercontent.com/Ph0en1x-dev/Hlam/refs/heads/main/Screen-recording-2025-11-06-155028.gif)
 */
 // ==/WindhawkModReadme==
 
